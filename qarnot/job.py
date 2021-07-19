@@ -69,6 +69,7 @@ class Job(object):
         self._update_cache_time = 5
         self._auto_update = True
         self._last_auto_update_state = self._auto_update
+        self._tags = []
 
         self._last_cache = time.time()
         self._completion_time_to_live = "00:00:00"
@@ -319,6 +320,7 @@ class Job(object):
             'poolUuid': self._pool_uuid,
             'shortname': self._shortname,
             'state': self._state,
+            'tags': self._tags,
             'useDependencies': self._use_dependencies,
             'maxWallTime': self._max_wall_time,
             'autoDeleteOnCompletion': self._auto_delete,
@@ -339,6 +341,7 @@ class Job(object):
         self._last_modified = json_job.get('lastModified')
         self._max_wall_time = json_job.get('maxWallTime')
         self._creation_date = _util.parse_datetime(json_job['creationDate'])
+        self._tags = json_job.get('tags', None)
 
     def submit(self):
         """Submit job to the cluster if it is not already submitted.
@@ -476,11 +479,32 @@ class Job(object):
             raise AttributeError("can't set attribute on a submitted job")
         self._completion_time_to_live = _util.parse_to_timespan_string(value)
 
+    @property
+    def tags(self):
+        """:type: :class:list(`str`)
+        :getter: Returns this job's tags
+        :setter: Sets this job's tags
+
+        Custom tags.
+        """
+        self._update_if_summary()
+        if self._auto_update:
+            self.update()
+
+        return self._tags
+
+    @tags.setter
+    def tags(self, value):
+        """Setter for tags"""
+        self._tags = value
+        self._auto_update = False
+
     def __repr__(self):
-        return '{0} - {1} - {2} - Pool : {3} - {4} - UseDependencies : {5} '\
+        return '{0} - {1} - {2} - Pool : {3} - {4} - Tags: {5} - UseDependencies : {6} '\
             .format(self.name,
                     self.shortname,
                     self._uuid,
                     self._pool_uuid,
                     self.state,
+                    self._tags,
                     self._use_dependencies)

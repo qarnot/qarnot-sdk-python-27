@@ -446,12 +446,15 @@ class Connection(object):
         buckets = [Bucket(self, x.name, create=False) for x in self._s3resource.buckets.all()]
         return buckets
 
-    def pools(self, summary=True, tags_intersect=None):
+    def pools(self, summary=True, tags_intersect=None, tags=None):
         """Get the list of pools stored on this cluster for this user.
 
+        if tags and tags_intersect are set, the connection will only return the pools with tag intersect values.
         :param bool summary: only get the summaries.
         :param tags_intersect: Desired filtering tags, all of them
         :type tags_intersect: list of :class:`str`, optional
+        :param tags: Desired filtering tags, any of them
+        :type tags: list of :class:`str`, optional
 
         :rtype: List of :class:`~qarnot.pool.Pool`.
         :returns: Pools stored on the cluster owned by the user.
@@ -464,6 +467,8 @@ class Connection(object):
         if tags_intersect:
             tag_filter = all_tag_filter(tags_intersect)
             response = self._post(get_url('pools search'), tag_filter)
+        elif tags:
+            response = self._get(url, params={'tag': tags})
         else:
             response = self._get(url)
         raise_on_error(response)
@@ -471,6 +476,8 @@ class Connection(object):
 
     def tasks(self, tags=None, summary=True, tags_intersect=None):
         """Get the list of tasks stored on this cluster for this user.
+
+        if tags and tags_intersect are set, the connection will only return the tasks with tag_intersect values.
 
         :param tags: Desired filtering tags, any of them
         :type tags: list of :class:`str`, optional
@@ -496,14 +503,26 @@ class Connection(object):
         raise_on_error(response)
         return [Task.from_json(self, task, summary) for task in response.json()]
 
-    def jobs(self):
+    def jobs(self, tags=None, tags_intersect=None):
         """Get the list of jobs stored on this cluster for this user.
+
+        if tags and tags_intersect are set, the connection will only return the jobs with tag intersect values.
+        :param tags: Desired filtering tags, any of them
+        :type tags: list of :class:`str`, optional
+        :param tags_intersect: Desired filtering tags, the jobs must have all of them
+        :type tags_intersect: list of :class:`str`, optional
 
         :raises qarnot.exceptions.UnauthorizedException: invalid credentials
         :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
 
-        response = self._get(get_url('jobs'))
+        if tags_intersect:
+            tag_filter = all_tag_filter(tags_intersect)
+            response = self._post(get_url('jobs search'), tag_filter)
+        elif tags:
+            response = self._get(get_url('jobs'), params={'tag': tags})
+        else:
+            response = self._get(get_url('jobs'))
         raise_on_error(response)
         return [Job.from_json(self, job) for job in response.json()]
 

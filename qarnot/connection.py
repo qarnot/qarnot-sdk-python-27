@@ -671,6 +671,19 @@ class Connection(object):
         if error_message:
             raise QarnotGenericException(error_message)
 
+    def profiles_names(self):
+        """Get list of profiles names available on the cluster.
+
+        :rtype: list of :class:`str`
+
+        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        """
+        url = get_url('profiles')
+        response = self._get(url)
+        raise_on_error(response)
+        return response.json()
+
     def profiles(self):
         """Get list of profiles available on the cluster.
 
@@ -679,12 +692,8 @@ class Connection(object):
         :raises qarnot.exceptions.UnauthorizedException: invalid credentials
         :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
-
-        url = get_url('profiles')
-        response = self._get(url)
-        raise_on_error(response)
         profiles_list = []
-        for p in response.json():
+        for p in self.profiles_names():
             url = get_url('profile details', profile=p)
             response2 = self._get(url)
             if response2.status_code == 404:

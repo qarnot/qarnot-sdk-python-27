@@ -916,6 +916,10 @@ class UserInfo(object):
         """:type: :class:`int`
 
         Maximum number of buckets allowed (resource and result buckets)."""
+        self.bucket_count = info.get('bucketCount', -1)
+        """:type: :class:`int`
+
+        Number of buckets owned by the user."""
         self.quota_bytes_bucket = info['quotaBytesBucket']
         """:type: :class:`int`
 
@@ -944,6 +948,30 @@ class UserInfo(object):
         """:type: :class:`int`
 
         Maximum number of instances."""
+        self.max_pool = info['maxPool']
+        """:type: :class:`int`
+
+        Maximum number of pool the user is allowed to create."""
+        self.pool_count = info['poolCount']
+        """:type: :class:`int`
+
+        Total number of pools belonging to the user."""
+        self.max_running_pool = info['maxRunningPool']
+        """:type: :class:`int`
+
+        Maximum number of running pools the user is allowed to create."""
+        self.running_pool_count = info['runningPoolCount']
+        """:type: :class:`int`
+
+        Number of pools currently submitted or running."""
+        self.running_instance_count = info['runningInstanceCount']
+        """:type: :class:`int`
+
+        Number of Instances currently submitted or running."""
+        self.running_core_count = info['runningCoreCount']
+        """:type: :class:`int`
+
+        Number of cores currently submitted or running."""
 
 
 class Profile(object):

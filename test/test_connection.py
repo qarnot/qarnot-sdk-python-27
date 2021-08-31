@@ -361,3 +361,44 @@ class TestConnectionPaginateMethods:
             with pytest.raises(StopIteration):
                 next(iterator)
             mock_page_call.assert_called_once()
+
+    def test_user_information(self):
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection._get") as get_user:
+            user_json = {
+                "email":"",
+                "maxBucket":5,
+                "bucketCount":6,
+                "quotaBytesBucket":7,
+                "usedQuotaBytesBucket":8,
+                "taskCount":9,
+                "maxTask":10,
+                "runningTaskCount":11,
+                "maxRunningTask":12,
+                "maxInstances":13,
+                "maxPool":14,
+                "poolCount":15,
+                "maxRunningPool":16,
+                "runningPoolCount":17,
+                "runningInstanceCount":18,
+                "runningCoreCount":19,
+            }
+            get_user.return_value.status_code = 200
+            get_user.return_value.json.return_value = user_json
+            user = connec.user_info()
+            assert user.email == user_json.get('email', '')
+            assert user.max_bucket == user_json['maxBucket']
+            assert user.bucket_count == user_json.get('bucketCount', -1)
+            assert user.quota_bytes_bucket == user_json['quotaBytesBucket']
+            assert user.used_quota_bytes_bucket == user_json['usedQuotaBytesBucket']
+            assert user.task_count == user_json['taskCount']
+            assert user.max_task == user_json['maxTask']
+            assert user.running_task_count == user_json['runningTaskCount']
+            assert user.max_running_task == user_json['maxRunningTask']
+            assert user.max_instances == user_json['maxInstances']
+            assert user.max_pool == user_json['maxPool']
+            assert user.pool_count == user_json['poolCount']
+            assert user.max_running_pool == user_json['maxRunningPool']
+            assert user.running_pool_count == user_json['runningPoolCount']
+            assert user.running_instance_count == user_json['runningInstanceCount']
+            assert user.running_core_count == user_json['runningCoreCount']

@@ -48,5 +48,8 @@ class MockConnection:
         else:
             return MockResponse(200)
 
+    def paginate_call(self, url, json=None, *args, **kwargs):
+        return self._post(url, json, args, kwargs)
+
     def add_response(self, response):
         self._responses.append(response)

@@ -6,14 +6,14 @@ from unittest.mock import patch, Mock
 import requests
 import simplejson
 
-expected_or_tags_filter = {'Filter': {"Operator": "Or", "Filters":[{"Operator": "Equal", "Field": "Tags", "Value": "tag1"}, {"Operator": "Equal", "Field": "Tags", "Value": "tag2"}]}}
-expected_and_tags_filter = {'Filter': {"Operator": "And", "Filters":[{"Operator": "Equal", "Field": "Tags", "Value": "tag_inter1"}, {"Operator": "Equal", "Field": "Tags", "Value": "tag_inter2"}]}}
-expected_and_or_tags_filter = {"Filter": {"Operator": "And", "Filters": [
-            {'Filter': {"Operator": "Or", "Filters": [{"Operator": "Equal", "Field": "Tags", "Value": "tag1"}, {
-                "Operator": "Equal", "Field": "Tags", "Value": "tag2"}]}},
-            {'Filter': {"Operator": "And", "Filters": [{"Operator": "Equal", "Field": "Tags", "Value": "tag_inter1"}, {
-                "Operator": "Equal", "Field": "Tags", "Value": "tag_inter2"}]}}
-        ]}}
+expected_or_tags_filter = {"operator": "Or", "filters":[{"operator": "Equal", "field": "Tags", "value": "tag1"}, {"operator": "Equal", "field": "Tags", "value": "tag2"}]}
+expected_and_tags_filter = {"operator": "And", "filters":[{"operator": "Equal", "field": "Tags", "value": "tag_inter1"}, {"operator": "Equal", "field": "Tags", "value": "tag_inter2"}]}
+expected_and_or_tags_filter = {"operator": "And", "filters": [
+            {"operator": "Or", "filters": [{"operator": "Equal", "field": "Tags", "value": "tag1"}, {
+                "operator": "Equal", "field": "Tags", "value": "tag2"}]},
+            {"operator": "And", "filters": [{"operator": "Equal", "field": "Tags", "value": "tag_inter1"}, {
+                "operator": "Equal", "field": "Tags", "value": "tag_inter2"}]}
+        ]}
 
 class TestConnectionMethods:
     def test_connection_with_bad_ssl_return_the_good_exception(self):

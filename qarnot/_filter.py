@@ -21,9 +21,7 @@ def concat_and_filters(filters):
     :return: A Json filter formated
     :rtype: Dict
     """
-    return {"Filter": {
-        "Operator": "And",
-        "Filters": filters}}
+    return {"operator": "And", "filters": filters}
 
 
 def concat_or_filters(filters):
@@ -35,9 +33,7 @@ def concat_or_filters(filters):
     :return: A Json filter formated
     :rtype: Dict
     """
-    return {"Filter": {
-        "Operator": "Or",
-        "Filters": filters}}
+    return {"operator": "Or", "filters": filters}
 
 
 def concat_filters(filters, exclude_filter=True):
@@ -66,19 +62,22 @@ def all_tag_filter(tags):
 
     if not isinstance(tags, list):
         tags = [tags]
-    tag_selector = {
-        "Filter":
-        {
-            "Operator": "And",
-            "Filters":
-            [
-                {
-                    "Operator": "Equal",
-                    "Field": "Tags",
-                    "Value": tag_value
-                } for tag_value in tags
-            ]
+    if len(tags) == 1:
+        return {
+            "operator": "Equal",
+            "field": "Tags",
+            "value": tags[0]
         }
+    tag_selector = {
+        "operator": "And",
+        "filters":
+        [
+            {
+                "operator": "Equal",
+                "field": "Tags",
+                "value": tag_value
+            } for tag_value in tags
+        ]
     }
     return tag_selector
 
@@ -92,19 +91,22 @@ def or_tag_filter(tags):
 
     if not isinstance(tags, list):
         tags = [tags]
-    tag_selector = {
-        "Filter":
-        {
-            "Operator": "Or",
-            "Filters":
-            [
-                {
-                    "Operator": "Equal",
-                    "Field": "Tags",
-                    "Value": tag_value
-                } for tag_value in tags
-            ]
+    if len(tags) == 1:
+        return {
+            "operator": "Equal",
+            "field": "Tags",
+            "value": tags[0]
         }
+    tag_selector = {
+        "operator": "Or",
+        "filters":
+        [
+            {
+                "operator": "Equal",
+                "field": "Tags",
+                "value": tag_value
+            } for tag_value in tags
+        ]
     }
     return tag_selector
 

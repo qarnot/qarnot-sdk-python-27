@@ -616,7 +616,7 @@ class Connection(object):
         """
 
         filter = create_pool_filter(tags=tags, tags_intersect=tags_intersect)
-        url = get_url('paginate pools summaries') if summary else get_url('paginate pools')
+        url = get_url('paginate pools summaries') if summary and filter is None else get_url('paginate pools')
         result = self._page_call(url, self._paginate_request(filter, token, maximum))
         data = [Pool.from_json(self, pool, summary) for pool in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
@@ -637,7 +637,7 @@ class Connection(object):
         """
 
         filter = create_task_filter(tags=tags, tags_intersect=tags_intersect)
-        url = get_url('paginate tasks summaries') if summary else get_url('paginate tasks')
+        url = get_url('paginate tasks summaries') if summary and filter is None else get_url('paginate tasks')
         result = self._page_call(url, self._paginate_request(filter, token, maximum))
         data = [Task.from_json(self, task, summary) for task in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)

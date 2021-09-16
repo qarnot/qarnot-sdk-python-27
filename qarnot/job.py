@@ -364,7 +364,7 @@ class Job(object):
             raise NotEnoughCreditsException(resp.json()['message'])
         raise_on_error(resp)
         self._uuid = resp.json()['uuid']
-        self.update()
+        self.update(True)
 
     def update(self, flushcache=False):
         """

@@ -20,7 +20,7 @@ buying some extended support from a company offering it, or maintaining it yours
 ## Partial feature set
 
 This backport is supplied as a convenience to be used by some people, organisations,
-or products that are trill relying on Python 2.7. This is by no means an offical support
+or products that are still relying on Python 2.7. This is by no means an offical support
 for Python 2.7, and this should not be considered as being one of our offical SDKs.
 
 This is a **partial** backport of our official SDK which was forked from version 2.3.1. From that point:

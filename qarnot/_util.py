@@ -13,7 +13,12 @@
 # limitations under the License.
 
 from datetime import datetime, timedelta
+import sys
 import re
+
+if sys.version_info[0] < 3:
+    # In python 2, datetime can cause a missing _strptime import
+    import _strptime  # pylint: disable=all
 
 _IS_PY2 = bytes is str
 

@@ -6,7 +6,7 @@ PYLINT_IGNORES := $(PYLINT_IGNORES),E501
 # line break before/after binary operator
 PYLINT_IGNORES := $(PYLINT_IGNORES),W503,W504
 
-PYTHON=python3
+PYTHON=python2.7
 
 all: build
 
@@ -29,14 +29,15 @@ install-requirements:
 ############ Linting and testing area
 
 flake8:
-	flake8 --ignore $(PYLINT_IGNORES) setup.py qarnot
+	flake8 --ignore E501,F405,F403,W503 setup.py qarnot
 
 pylint:
-	pylint --rcfile=setup.cfg qarnot/*.py --disable=all --enable=W,E,F -d W0212, W1620
-	# W0212: Access to a protected member "" of a client class (protected-access)
-	# W1620: Calling a dict.iter*() method
+	pylint --rcfile=setup.cfg qarnot/*.py --disable=C,R,W0212,W1620
 
 lint: flake8 pylint
+
+quick-tests:
+	pytest -v -m "not (slow)"
 
 unit-tests:
 	pytest -v

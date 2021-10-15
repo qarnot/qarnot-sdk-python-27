@@ -132,6 +132,7 @@ class Task(object):
         self._completion_time_to_live = "00:00:00"
         self._auto_delete = False
         self._wait_for_pool_resources_synchronization = None
+        self._upload_results_on_cancellation = None
 
     @classmethod
     def _retrieve(cls, connection, uuid):
@@ -413,6 +414,7 @@ class Task(object):
         self._uuid = json_task['uuid']
         self._state = json_task['state']
         self._tags = json_task.get('tags', None)
+        self._upload_results_on_cancellation = json_task.get('uploadResultsOnCancellation', None)
         if 'resultsCount' in json_task:
             if self._rescount < json_task['resultsCount']:
                 self._dirty = True
@@ -1217,6 +1219,27 @@ class Task(object):
         """
         self._update_cache_time = value
 
+    @property
+    def upload_results_on_cancellation(self):
+        """:type: :class:`Optional[bool]`
+
+        :getter: Whether task results will be uploaded upon task cancellation
+        :setter: Set to `True` to upload results on task cancellation, `False` to
+                 make sure they won't be uploaded, and keep to `None` to get the
+                 default behavior.
+
+        :raises AttributeError: trying to set this after the task is submitted
+        """
+        return self._upload_results_on_cancellation
+
+    @upload_results_on_cancellation.setter
+    def upload_results_on_cancellation(self, value):
+        """Setter for upload_results_on_cancellation"""
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._upload_results_on_cancellation = value
+
     def set_task_dependencies_from_uuids(self, uuids):
         """Setter for the task dependencies using uuid
         """
@@ -1298,7 +1321,8 @@ class Task(object):
             'constants': const_list,
             'constraints': constr_list,
             'dependencies': {},
-            'waitForPoolResourcesSynchronization': self._wait_for_pool_resources_synchronization
+            'waitForPoolResourcesSynchronization': self._wait_for_pool_resources_synchronization,
+            'uploadResultsOnCancellation': self._upload_results_on_cancellation
         }
         json_task['dependencies']["dependsOn"] = self._dependentOn
 
@@ -1329,6 +1353,7 @@ class Task(object):
 
         json_task['autoDeleteOnCompletion'] = self._auto_delete
         json_task['completionTimeToLive'] = self._completion_time_to_live
+
         return json_task
 
     def _update_if_summary(self):

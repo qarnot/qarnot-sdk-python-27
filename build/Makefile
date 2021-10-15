@@ -34,7 +34,7 @@ flake8:
 pylint:
 	pylint --rcfile=setup.cfg qarnot/*.py --disable=C,R,W0212,W1620
 
-lint: flake8 pylint
+lint: flake8
 
 quick-tests:
 	pytest -v -m "not (slow)"

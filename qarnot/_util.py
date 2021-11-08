@@ -18,7 +18,7 @@ import re
 
 if sys.version_info[0] < 3:
     # In python 2, datetime can cause a missing _strptime import
-    import _strptime  # noqa: F401 
+    import _strptime  # noqa: F401
 
 _IS_PY2 = bytes is str
 

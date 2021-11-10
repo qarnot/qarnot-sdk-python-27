@@ -17,9 +17,10 @@
 # limitations under the License.
 
 from . import get_url, raise_on_error, __version__
+from .hardware_constraint import HardwareConstraint
 from .task import Task, BulkTaskResponse
 from .pool import Pool
-from .paginate import PaginateResponse
+from .paginate import PaginateResponse, OffsetResponse
 from .bucket import Bucket
 from .job import Job
 from ._filter import create_pool_filter, create_task_filter, create_job_filter
@@ -575,6 +576,32 @@ class Connection(object):
             for task in page.page_data:
                 yield task
 
+    def all_hardware_constraints(self):
+        """Get all the hardware constraints.
+
+        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        """
+        return self._all_offset_pages(self.hardware_constraints_page)
+
+    def _all_offset_pages(self, page_function, **kwargs):
+        """Return all the offset pages of an object.
+
+        :param page_function: the call function used to retrieve an offset page list.
+        :type page_function: Function
+        :yield: An object
+        :rtype: Iterator[Iterable]
+        """
+
+        next_offset = 0
+        is_truncated = True
+        while is_truncated:
+            page = page_function(offset=next_offset, **kwargs)
+            next_offset = page.offset + page.limit
+            is_truncated = page.total > next_offset
+            for data in page.page_data:
+                yield data
+
     def _paginate_request(self, filter, token, maximum):
         """A paginate request creator.
 
@@ -586,6 +613,30 @@ class Connection(object):
             "token": token,
             "maximumResults": maximum
         }
+
+    def _offset_request(self, limit, offset):
+        """An offset request creator.
+
+        :return: The dictionary of query parameters to add to request.
+        :rtype: Dict
+        """
+        return {
+            "limit": limit,
+            "offset": offset
+        }
+
+    def _offset_call(self, url, params):
+        """Call the api and return the response body of the GET request
+
+        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+
+        :return: The response body
+        :rtype: Dict
+        """
+        response = self._get(url, params=params)
+        raise_on_error(response)
+        return response.json()
 
     def _page_call(self, url, request):
         """Call the api and return the response body
@@ -659,6 +710,21 @@ class Connection(object):
         result = self._page_call(get_url('paginate jobs'), self._paginate_request(filter, token, maximum))
         data = [Job.from_json(self, job) for job in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
+
+    def hardware_constraints_page(self, limit = 50, offset = 0):
+        """Return a list of hardware constraints limited with offset.
+
+        :param limit: limit the number of displayed constraints, defaults to 50
+        :type limit: `int`, optional
+        :param offset: the number of constraints ignored in the response, defaults to 0
+        :type token: `int`, optional
+        :return: An offset object
+        :rtype: `qarnot.paginate.OffsetResponse`
+        """
+
+        result = self._offset_call(get_url('hardware constraints'), self._offset_request(limit, offset))
+        data = [HardwareConstraint.from_json(hw_constraint) for hw_constraint in result["data"]]
+        return OffsetResponse(total=result["total"], limit=result["limit"], offset=result["offset"], page_data=data)
 
     def retrieve_pool(self, uuid):
         """Retrieve a :class:`qarnot.pool.Pool` from its uuid

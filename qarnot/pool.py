@@ -19,6 +19,7 @@ import warnings
 from . import raise_on_error, get_url, _util
 from .bucket import Bucket
 from .status import Status
+from .hardware_constraint import HardwareConstraint
 from .error import Error
 from .exceptions import MissingPoolException, MaxPoolException, NotEnoughCreditsException, \
     BucketStorageUnavailableException, MissingBucketException
@@ -58,7 +59,7 @@ class Pool(object):
         """
          :type: dict(str, str)
 
-         Constants of the task.
+         Constants of the pool.
          Can be set until :meth:`submit` is called
 
         .. note:: See available constants for a specific profile
@@ -96,6 +97,7 @@ class Pool(object):
         self._auto_delete = False
         self._tasks_wait_for_synchronization = False
 
+        self._hardware_constraints = []
     @classmethod
     def _retrieve(cls, connection, uuid):
         """Retrieve a submitted pool given its uuid.
@@ -183,6 +185,7 @@ class Pool(object):
             self._elastic_resize_factor = elasticProperty["rampResizeFactor"]
             self._elastic_resize_period = elasticProperty["resizePeriod"]
 
+        self._hardware_constraints = json_pool.get("hardwareConstraints", [])
     def _to_json(self):
         """Get a dict ready to be json packed from this pool."""
         const_list = [
@@ -225,6 +228,7 @@ class Pool(object):
 
         json_pool['autoDeleteOnCompletion'] = self._auto_delete
         json_pool['completionTimeToLive'] = self._completion_time_to_live
+        json_pool['hardwareConstraints'] = [x.to_json() for x in self._hardware_constraints]
 
         return json_pool
 
@@ -941,6 +945,26 @@ class Pool(object):
         if self._uuid is not None:
             raise AttributeError("can't set attribute on a submitted job")
         self._completion_time_to_live = _util.parse_to_timespan_string(value)
+
+    @property
+    def hardware_constraints(self):
+        """:type: :class:`list`, optional
+
+        :getter: setup the hardware constraints
+        :setter: Set up specific hardware constraints.
+
+        :raises AttributeError: trying to set this after the task is submitted
+        """
+        return self._hardware_constraints
+
+    @hardware_constraints.setter
+    def hardware_constraints(self, value):
+        """Setter for hardware_constraints
+        """
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._hardware_constraints = value
 
     def __repr__(self):
         return '{0} - {1} - {2} - {3} - {5} - InstanceCount : {4} - Resources : {6} '\

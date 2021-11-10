@@ -22,6 +22,7 @@ import sys
 
 from . import get_url, raise_on_error, _util
 from .status import Status
+from .hardware_constraint import HardwareConstraint
 from .bucket import Bucket
 from .pool import Pool
 from .error import Error
@@ -134,6 +135,7 @@ class Task(object):
         self._auto_delete = False
         self._wait_for_pool_resources_synchronization = None
         self._upload_results_on_cancellation = None
+        self._hardware_constraints = []
 
     @classmethod
     def _retrieve(cls, connection, uuid):
@@ -440,6 +442,8 @@ class Task(object):
             self._auto_delete = json_task["autoDeleteOnCompletion"]
         if 'completionTimeToLive' in json_task:
             self._completion_time_to_live = json_task["completionTimeToLive"]
+
+        self._hardware_constraints = json_task.get("hardwareConstraints", [])
 
     @classmethod
     def from_json(cls, connection, json_task, is_summary=False):
@@ -1283,6 +1287,26 @@ class Task(object):
         self._dependentOn += [task._uuid for task in tasks]
 
     @property
+    def hardware_constraints(self):
+        """:type: :class:`list`, optional
+
+        :getter: setup the hardware constraints
+        :setter: Set up specific hardware constraints.
+
+        :raises AttributeError: trying to set this after the task is submitted
+        """
+        return self._hardware_constraints
+
+    @hardware_constraints.setter
+    def hardware_constraints(self, value):
+        """Setter for hardware_constraints
+        """
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._hardware_constraints = value
+
+    @property
     def auto_delete(self):
         """Autodelete this Task if it is finished and your max number of task is reach
 
@@ -1386,6 +1410,7 @@ class Task(object):
 
         json_task['autoDeleteOnCompletion'] = self._auto_delete
         json_task['completionTimeToLive'] = self._completion_time_to_live
+        json_task['hardwareConstraints'] = [x.to_json() for x in self._hardware_constraints]
 
         return json_task
 

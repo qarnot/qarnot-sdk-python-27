@@ -49,7 +49,9 @@ class Connection(object):
     def __init__(self, fileconf=None, client_token=None,
                  cluster_url=None, cluster_unsafe=False, cluster_timeout=None,
                  storage_url=None, storage_unsafe=False,
-                 retry_count=5, retry_wait=1.0, cluster_custom_certificate=None, storage_custom_certificate=None):
+                 retry_count=5, retry_wait=1.0,
+                 cluster_custom_certificate=None, storage_custom_certificate=None,
+                 sanitize_bucket_paths=True, show_bucket_warnings=True):
         """Create a connection to a cluster with given config file, options or environment variables.
         Available environment variable are
         `QARNOT_CLUSTER_URL`, `QARNOT_CLUSTER_UNSAFE`, `QARNOT_CLUSTER_TIMEOUT` and `QARNOT_CLIENT_TOKEN`.
@@ -64,6 +66,8 @@ class Connection(object):
         :param bool storage_unsafe: (optional) Disable certificate check
         :param int retry_count: (optional) ConnectionError retry count. Default to 5.
         :param float retry_wait: (optional) Retry on error wait time, progressive. (wait * (retry_count - retry_num). Default to 1s
+        :param bool sanitize_bucket_paths: (optional) Flag to automatically sanitize bucket paths (remove extra slashes). Default to true
+        :param bool show_bucket_warnings: (optional) Flag to show warnings of bucket paths sanitization. Default to true
 
         Configuration sample:
 
@@ -86,6 +90,8 @@ class Connection(object):
         self._http = requests.session()
         self._retry_count = retry_count
         self._retry_wait = retry_wait
+        self._sanitize_bucket_paths = sanitize_bucket_paths
+        self._show_bucket_warnings = show_bucket_warnings
         if fileconf is not None:
             self.storage = None
             if isinstance(fileconf, dict):

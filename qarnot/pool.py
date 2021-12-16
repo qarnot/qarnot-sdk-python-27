@@ -65,6 +65,7 @@ class Pool(object):
               with :meth:`qarnot.connection.Connection.retrieve_profile`.
         """
         self._constraints = {}
+        self._labels = {}
         self._auto_update = True
         self._last_auto_update_state = self._auto_update
         self._update_cache_time = 5
@@ -164,6 +165,7 @@ class Pool(object):
         self._preparation_task = json_pool.get('preparationTask')
         self._tags = json_pool.get('tags', None)
         self._tasks_wait_for_synchronization = json_pool.get('tasksDefaultWaitForPoolResourcesSynchronization', False)
+        self._labels = json_pool.get('labels', {})
 
         if 'autoDeleteOnCompletion' in json_pool:
             self._auto_delete = json_pool["autoDeleteOnCompletion"]
@@ -211,7 +213,8 @@ class Pool(object):
             'tags': self._tags,
             'preparationTask': self._preparation_task,
             'elasticProperty': elastic_dict,
-            'tasksDefaultWaitForPoolResourcesSynchronization': self._tasks_wait_for_synchronization
+            'tasksDefaultWaitForPoolResourcesSynchronization': self._tasks_wait_for_synchronization,
+            'labels': self._labels,
         }
 
         if self._shortname is not None:
@@ -795,9 +798,9 @@ class Pool(object):
         :getter: Returns this pool's constants dictionary.
         :setter: set the pool's constants dictionary.
 
-        Update the constants if needed
-        Constants are the parametrazer of the profils.
-        Use them to adjust your profile parametter.
+        Update the constants if needed.
+        Constants are used to configure the profiles,
+        set them to change your profile's parameters.
         """
         self._update_if_summary()
         if self._auto_update:
@@ -839,6 +842,35 @@ class Pool(object):
             self.update()
 
         self._constraints = value
+
+    @property
+    def labels(self):
+        """:type: dictionary{:class:`str` : :class:`str`}
+        :getter: Return this pool's labels dictionary.
+        :setter: set the pool's labels constraints dictionary.
+
+        Labels are used to attach arbitrary key / value pairs
+        to a pool in order to find them later with greater ease.
+        They do not affect the execution of a pool.
+        """
+        self._update_if_summary()
+        if self._auto_update:
+            self.update()
+
+        return self._labels
+
+    @labels.setter
+    def labels(self, value):
+        """Setter for labels
+        """
+        self._update_if_summary()
+        if self._auto_update:
+            self.update()
+
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._labels = value
 
     @property
     def tasks_default_wait_for_pool_resources_synchronization(self):

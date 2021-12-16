@@ -112,6 +112,7 @@ class Task(object):
 
         self._last_cache = time.time()
         self._constraints = {}
+        self._labels = {}
         self._state = 'UnSubmitted'  # RO property same for below
         self._uuid = None
         self._snapshots = False
@@ -387,6 +388,7 @@ class Task(object):
         self._instancecount = json_task.get('instanceCount')
         self._advanced_range = json_task.get('advancedRanges')
         self._wait_for_pool_resources_synchronization = json_task.get('waitForPoolResourcesSynchronization', None)
+        self._labels = json_task.get("labels", {})
 
         if json_task['runningCoreCount'] is not None:
             self._running_core_count = json_task['runningCoreCount']
@@ -1165,6 +1167,36 @@ class Task(object):
         self._constraints = value
 
     @property
+    def labels(self):
+        """:type: dictionary{:class:`str` : :class:`str`}
+        :getter: Returns this task's labels dictionary.
+        :setter: Set the task's labels dictionary.
+
+        Update the labels if needed.
+        Labels are used to attach arbitrary key / value pairs
+        to a task in order to find them later with greater ease.
+        They do not affect the execution of a task.
+        """
+        self._update_if_summary()
+        if self._auto_update:
+            self.update()
+
+        return self._labels
+
+    @labels.setter
+    def labels(self, value):
+        """Setter for labels
+        """
+        self._update_if_summary()
+        if self._auto_update:
+            self.update()
+
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._labels = value
+
+    @property
     def wait_for_pool_resources_synchronization(self):
         """:type: :class:`bool` or None
         :getter: Returns this task's wait_for_pool_resources_synchronization.
@@ -1322,7 +1354,8 @@ class Task(object):
             'constraints': constr_list,
             'dependencies': {},
             'waitForPoolResourcesSynchronization': self._wait_for_pool_resources_synchronization,
-            'uploadResultsOnCancellation': self._upload_results_on_cancellation
+            'uploadResultsOnCancellation': self._upload_results_on_cancellation,
+            'labels': self._labels,
         }
         json_task['dependencies']["dependsOn"] = self._dependentOn
 

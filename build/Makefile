@@ -37,10 +37,10 @@ pylint:
 lint: flake8
 
 quick-tests:
-	pytest -v -m "not (slow)"
+	pytest -v -m "not (slow)" test
 
 unit-tests:
-	pytest -v
+	pytest -v test
 
 integration-tests:
 	@echo "for intergration tests, see the internal simple"

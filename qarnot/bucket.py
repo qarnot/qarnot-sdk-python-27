@@ -69,10 +69,6 @@ class Bucket(Storage):
         self._connection = connection
         self._uuid = name
 
-        if (self._connection._sanitize_bucket_paths):
-            self._filtering.sanitize_filter_paths(self._connection._show_bucket_warnings)
-            self._resources_transformation.sanitize_transformation_paths(self._connection._show_bucket_warnings)
-
         if create:
             self._connection.s3client.create_bucket(Bucket=name)
 

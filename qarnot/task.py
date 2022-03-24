@@ -617,9 +617,11 @@ class Task(object):
            * FullyExecuting
            * UploadingResults
            * DownloadingResults
+           * PendingCancel
            * Cancelled
            * Success
            * Failure
+           * PendingDelete
 
         .. warning::
            this is the state of the task when the object was retrieved,

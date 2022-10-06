@@ -3,3 +3,4 @@ pytest-runner
 simplejson
 pylint
 flake8
+mock

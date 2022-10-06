@@ -22,7 +22,6 @@ import sys
 
 from . import get_url, raise_on_error, _util
 from .status import Status
-from .hardware_constraint import HardwareConstraint
 from .bucket import Bucket
 from .pool import Pool
 from .error import Error
@@ -129,6 +128,7 @@ class Task(object):
         self._creation_date = None
         self._errors = None
         self._resource_object_ids = []
+        self._resource_object_advanced = []
         self._result_object_id = None
         self._is_summary = False
         self._completion_time_to_live = "00:00:00"
@@ -136,6 +136,7 @@ class Task(object):
         self._wait_for_pool_resources_synchronization = None
         self._upload_results_on_cancellation = None
         self._hardware_constraints = []
+        self._default_resources_cache_ttl_sec = None
 
     @classmethod
     def _retrieve(cls, connection, uuid):
@@ -400,6 +401,9 @@ class Task(object):
         if 'resourceBuckets' in json_task and json_task['resourceBuckets']:
             self._resource_object_ids = json_task['resourceBuckets']
 
+        if 'advancedResourceBuckets' in json_task and json_task['advancedResourceBuckets']:
+            self._resource_object_advanced = json_task['advancedResourceBuckets']
+
         if 'resultBucket' in json_task and json_task['resultBucket']:
             self._result_object_id = json_task['resultBucket']
 
@@ -444,6 +448,7 @@ class Task(object):
             self._completion_time_to_live = json_task["completionTimeToLive"]
 
         self._hardware_constraints = json_task.get("hardwareConstraints", [])
+        self._default_resources_cache_ttl_sec = json_task.get("defaultResourcesCacheTTLSec", None)
 
     @classmethod
     def from_json(cls, connection, json_task, is_summary=False):
@@ -643,6 +648,10 @@ class Task(object):
         if self._auto_update:
             self.update()
         if not self._resource_objects:
+            for adv in self._resource_object_advanced:
+                d = Bucket.from_json(self._connection, adv)
+                self._resource_objects.append(d)
+
             for bid in self._resource_object_ids:
                 d = Bucket(self._connection, bid)
                 self._resource_objects.append(d)
@@ -1309,6 +1318,23 @@ class Task(object):
         self._hardware_constraints = value
 
     @property
+    def default_resources_cache_ttl_sec(self):
+        """:type: :class:`int`, optional
+        :getter: The default time to live used for all the task resources cache
+        :raises AttributeError: trying to set this after the task is submitted
+        """
+        return self._default_resources_cache_ttl_sec
+
+    @default_resources_cache_ttl_sec.setter
+    def default_resources_cache_ttl_sec(self, value):
+        """Setter for default_resources_cache_ttl_sec
+        """
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched task")
+
+        self._default_resources_cache_ttl_sec = value
+
+    @property
     def auto_delete(self):
         """Autodelete this Task if it is finished and your max number of task is reach
 
@@ -1388,8 +1414,8 @@ class Task(object):
         if self._shortname is not None:
             json_task['shortname'] = self._shortname
 
-        self._resource_object_ids = [x.uuid for x in self._resource_objects]
-        json_task['resourceBuckets'] = self._resource_object_ids
+        self._resource_object_advanced = [x.to_json() for x in self._resource_objects]
+        json_task['advancedResourceBuckets'] = self._resource_object_advanced
 
         if self._result_object is not None:
             json_task['resultBucket'] = self._result_object.uuid
@@ -1413,6 +1439,7 @@ class Task(object):
         json_task['autoDeleteOnCompletion'] = self._auto_delete
         json_task['completionTimeToLive'] = self._completion_time_to_live
         json_task['hardwareConstraints'] = [x.to_json() for x in self._hardware_constraints]
+        json_task['defaultResourcesCacheTTLSec'] = self._default_resources_cache_ttl_sec
 
         return json_task
 

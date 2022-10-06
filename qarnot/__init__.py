@@ -19,7 +19,7 @@
 from .exceptions import QarnotGenericException
 
 __all__ = ["task", "connection", "bucket", "pool",
-            "storage", "status", "job", "hardware_constraint"]
+           "storage", "status", "job", "advanced_bucket", "hardware_constraint"]
 
 
 def raise_on_error(response):

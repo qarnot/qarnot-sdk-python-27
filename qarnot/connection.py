@@ -40,6 +40,7 @@ if sys.version_info[0] >= 3:  # module renamed in py3
 else:
     import ConfigParser as config  # pylint: disable=import-error
 
+
 #########
 # class #
 #########
@@ -507,7 +508,7 @@ class Connection(object):
         """
         return list(self.all_jobs(tags=tags, tags_intersect=tags_intersect))
 
-    def all_pools(self, summary = True, tags = None, tags_intersect = None):
+    def all_pools(self, summary=True, tags=None, tags_intersect=None):
         """Get an iterator of all the pools.
 
         if tags and tags_intersect are set, the connection will only return the pools with tag intersect values.
@@ -525,7 +526,7 @@ class Connection(object):
         """
         return self._all_pages(self.pools_page, summary=summary, tags=tags, tags_intersect=tags_intersect)
 
-    def all_tasks(self, summary = True, tags = None, tags_intersect = None):
+    def all_tasks(self, summary=True, tags=None, tags_intersect=None):
         """Get an iterator of all the tasks.
 
         if tags and tags_intersect are set, the connection will only return the tasks with tag_intersect values.
@@ -544,7 +545,7 @@ class Connection(object):
         """
         return self._all_pages(self.tasks_page, summary=summary, tags=tags, tags_intersect=tags_intersect)
 
-    def all_jobs(self, tags = None, tags_intersect = None):
+    def all_jobs(self, tags=None, tags_intersect=None):
         """Get an iterator of all the jobs.
 
         if tags and tags_intersect are set, the connection will only return the jobs with tag intersect values.
@@ -651,7 +652,7 @@ class Connection(object):
         raise_on_error(response)
         return response.json()
 
-    def pools_page(self, token = None, maximum = None, summary = True, tags = None, tags_intersect = None):
+    def pools_page(self, token=None, maximum=None, summary=True, tags=None, tags_intersect=None):
         """Return a paginate pool object retriver.
 
         :param summary: retrive a pool or a pool summary, defaults to True
@@ -672,7 +673,7 @@ class Connection(object):
         data = [Pool.from_json(self, pool, summary) for pool in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
 
-    def tasks_page(self, token = None, maximum = None, summary = True, tags = None, tags_intersect = None):
+    def tasks_page(self, token=None, maximum=None, summary=True, tags=None, tags_intersect=None):
         """Return a paginate task object.
 
         :param summary: retrive a task or a task summary, defaults to True
@@ -693,7 +694,7 @@ class Connection(object):
         data = [Task.from_json(self, task, summary) for task in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
 
-    def jobs_page(self, token = None, maximum = None, tags = None, tags_intersect = None):
+    def jobs_page(self, token=None, maximum=None, tags=None, tags_intersect=None):
         """Return a paginate job object.
 
         :param tags_intersect: use a tag exclusive filter, defaults to None
@@ -711,7 +712,7 @@ class Connection(object):
         data = [Job.from_json(self, job) for job in result["data"]]
         return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
 
-    def hardware_constraints_page(self, limit = 50, offset = 0):
+    def hardware_constraints_page(self, limit=50, offset=0):
         """Return a list of hardware constraints limited with offset.
 
         :param limit: limit the number of displayed constraints, defaults to 50

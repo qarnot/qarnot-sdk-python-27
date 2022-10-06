@@ -19,7 +19,6 @@ import warnings
 from . import raise_on_error, get_url, _util
 from .bucket import Bucket
 from .status import Status
-from .hardware_constraint import HardwareConstraint
 from .error import Error
 from .exceptions import MissingPoolException, MaxPoolException, NotEnoughCreditsException, \
     BucketStorageUnavailableException, MissingBucketException
@@ -73,6 +72,7 @@ class Pool(object):
 
         self._last_cache = time.time()
         self._instancecount = instancecount
+        self._resource_object_advanced = []
         self._resource_object_ids = []
         self._resource_objects = []
         self._tags = []
@@ -98,6 +98,8 @@ class Pool(object):
         self._tasks_wait_for_synchronization = False
 
         self._hardware_constraints = []
+        self._default_resources_cache_ttl_sec = None
+
     @classmethod
     def _retrieve(cls, connection, uuid):
         """Retrieve a submitted pool given its uuid.
@@ -155,6 +157,9 @@ class Pool(object):
         if 'resourceBuckets' in json_pool and json_pool['resourceBuckets'] is not None:
             self._resource_object_ids = json_pool['resourceBuckets']
 
+        if 'advancedResourceBuckets' in json_pool and json_pool['advancedResourceBuckets']:
+            self._resource_object_advanced = json_pool['advancedResourceBuckets']
+
         if 'status' in json_pool:
             self._status = json_pool['status']
         self._creation_date = _util.parse_datetime(json_pool['creationDate'])
@@ -186,6 +191,8 @@ class Pool(object):
             self._elastic_resize_period = elasticProperty["resizePeriod"]
 
         self._hardware_constraints = json_pool.get("hardwareConstraints", [])
+        self._default_resources_cache_ttl_sec = json_pool.get("defaultResourcesCacheTTLSec", None)
+
     def _to_json(self):
         """Get a dict ready to be json packed from this pool."""
         const_list = [
@@ -223,12 +230,13 @@ class Pool(object):
         if self._shortname is not None:
             json_pool['shortname'] = self._shortname
 
-        self._resource_object_ids = [x.uuid for x in self._resource_objects]
-        json_pool['resourceBuckets'] = self._resource_object_ids
+        self._resource_object_advanced = [x.to_json() for x in self._resource_objects]
+        json_pool['advancedResourceBuckets'] = self._resource_object_advanced
 
         json_pool['autoDeleteOnCompletion'] = self._auto_delete
         json_pool['completionTimeToLive'] = self._completion_time_to_live
         json_pool['hardwareConstraints'] = [x.to_json() for x in self._hardware_constraints]
+        json_pool['defaultResourcesCacheTTLSec'] = self._default_resources_cache_ttl_sec
 
         return json_pool
 
@@ -435,6 +443,10 @@ class Pool(object):
         if self._auto_update:
             self.update()
         if not self._resource_objects:
+            for adv in self._resource_object_advanced:
+                d = Bucket.from_json(self._connection, adv)
+                self._resource_objects.append(d)
+
             for bid in self._resource_object_ids:
                 d = Bucket(self._connection, bid)
                 self._resource_objects.append(d)
@@ -965,6 +977,23 @@ class Pool(object):
             raise AttributeError("can't set attribute on a launched task")
 
         self._hardware_constraints = value
+
+    @property
+    def default_resources_cache_ttl_sec(self):
+        """:type: :class:`int`, optional
+        :getter: The default time to live used for all the pool resources cache
+        :raises AttributeError: trying to set this after the task is submitted
+        """
+        return self._default_resources_cache_ttl_sec
+
+    @default_resources_cache_ttl_sec.setter
+    def default_resources_cache_ttl_sec(self, value):
+        """Setter for default_resources_cache_ttl_sec
+        """
+        if self.uuid is not None:
+            raise AttributeError("can't set attribute on a launched pool")
+
+        self._default_resources_cache_ttl_sec = value
 
     def __repr__(self):
         return '{0} - {1} - {2} - {3} - {5} - InstanceCount : {4} - Resources : {6} '\

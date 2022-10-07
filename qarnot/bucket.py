@@ -101,11 +101,11 @@ class Bucket(Storage):
         :returns: The created :class:`~qarnot.bucket.Bucket`.
         """
         filtering = None
-        if 'filtering' in json_bucket:
+        if 'filtering' in json_bucket and json_bucket['filtering']:
             filtering = Filtering.from_json(json_bucket['filtering'])
 
         resource_transformation = None
-        if 'resourcesTransformation' in json_bucket:
+        if 'resourcesTransformation' in json_bucket and json_bucket['resourcesTransformation']:
             resource_transformation = ResourcesTransformation.from_json(json_bucket['resourcesTransformation'])
 
         bucket = Bucket(connection, json_bucket['bucketName'], create=False, filtering=filtering, resources_transformation=resource_transformation, cacheTTLSec=json_bucket['cacheTTLSec'])

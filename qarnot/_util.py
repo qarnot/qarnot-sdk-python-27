@@ -1,3 +1,4 @@
+from __future__ import print_function
 # Copyright 2017 Qarnot computing
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,18 +13,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from datetime import datetime, timedelta
 import sys
+
+from datetime import datetime, timedelta
+from requests import Response
+from simplejson import JSONDecodeError as simpleJsonDecodeError
+try:
+    from json import JSONDecodeError
+except ImportError:
+    JSONDecodeError = ValueError
+try:
+    from http.client import responses as http_responses
+except ImportError:
+    from httplib import responses as http_responses
+
 import re
 
-if sys.version_info[0] < 3:
-    # In python 2, datetime can cause a missing _strptime import
-    import _strptime  # noqa: F401
+PY2 = sys.version_info[0] == 2
 
-_IS_PY2 = bytes is str
-
-if not _IS_PY2:
-    unicode = str
+if PY2:
+    string_types = (str, bytes, unicode)  # noqa: F821
+    text_type = unicode  # noqa: F821
+else:
+    string_types = (str, bytes)
+    text_type = str
 
 
 def copy_docs(docs_source):
@@ -43,7 +56,7 @@ def decode(string, encoding='utf-8'):
 
 def is_string(x):
     """Check if x is a string (bytes or unicode)."""
-    return isinstance(x, (str, unicode))
+    return isinstance(x, string_types)
 
 
 def parse_to_timespan_string(value):
@@ -55,11 +68,11 @@ def parse_to_timespan_string(value):
     :return: the valid timespan parsed
     :rtype: :class:`str`
     """
-    if isinstance(value, str) and re.match(r'([0-9]\.)?[0-9]{2}:[0-9]{2}:[0-9]{2}', value):
+    if isinstance(value, string_types) and re.match(r'([0-9]\.)?[0-9]{2}:[0-9]{2}:[0-9]{2}', value):
         return value
     elif isinstance(value, timedelta):
         return convert_timedelta_to_timespan_string(value)
-    raise TypeError("value must be a timedelta or time span format string (example: 'd.hh:mm:ss' or 'hh:mm:ss')")
+    raise TypeError("value must be a timedelta or time span format string (example: ``d.hh:mm:ss`` or ``hh:mm:ss`` )")
 
 
 def convert_timedelta_to_timespan_string(duration):
@@ -76,14 +89,9 @@ def parse_datetime(string):
     try:
         # '2018-06-13T09:06:20Z'
         return datetime.strptime(string, "%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
-        pass
-
-    try:
+    except ValueError:
         # '2018-06-13T09:06:20.537708Z'
         return datetime.strptime(string, "%Y-%m-%dT%H:%M:%S.%fZ")
-    except Exception:
-        raise
 
 
 def parse_timedelta(string):
@@ -98,29 +106,28 @@ def parse_timedelta(string):
     if string is None:
         return timedelta(day, second, 0, millisecond, minute, hour)
 
-    try:
-        splitted_timedelta = string.split(":")
-        if len(splitted_timedelta) == 3:
-            # handle days and hours
-            if ('.' in splitted_timedelta[0]):
-                day_string, hour_string = splitted_timedelta[0].split('.')
-            else:
-                hour_string = splitted_timedelta[0]
-            # handle minute
-            minute_string = splitted_timedelta[1]
-            # handle seconds and milliseconds
-            if ('.' in splitted_timedelta[2]):
-                second_string, millisecond_string = splitted_timedelta[2].split('.')
-            else:
-                second_string = splitted_timedelta[2]
+    splitted_timedelta = string.split(":")
+    if len(splitted_timedelta) == 3:
+        # handle days and hours
+        if ('.' in splitted_timedelta[0]):
+            day_string, hour_string = splitted_timedelta[0].split('.')
+        else:
+            hour_string = splitted_timedelta[0]
+        # handle minute
+        minute_string = splitted_timedelta[1]
+        # handle seconds and milliseconds
+        if ('.' in splitted_timedelta[2]):
+            second_string, millisecond_string = splitted_timedelta[2].split('.')
+        else:
+            second_string = splitted_timedelta[2]
 
-            day = int(day_string)
-            hour = int(hour_string)
-            minute = int(minute_string)
-            second = int(second_string)
-            millisecond = int(millisecond_string)
-    except Exception:
-        raise
+        day = int(day_string)
+        hour = int(hour_string)
+        minute = int(minute_string)
+        second = int(second_string)
+        millisecond = int(millisecond_string)
+    else:
+        raise ValueError("parse_timedelta format should be [d'.']hh':'mm':'ss['.'fffffff].")
 
     return timedelta(day, second, 0, millisecond, minute, hour)
 
@@ -141,7 +148,22 @@ def get_sanitized_bucket_path(path, show_warning=True):
         if path != original_path:
             warning += "Path changed from " + original_path + " to " + path + "\n"
             warning += "If bucket path sanitization is not wanted, please open a new connection with the constructor flag 'sanitize_bucket_paths=False'"
-        if show_warning:
+        if show_warning and warning != "":
             print(warning)
         return path.strip()
     return path
+
+
+def get_error_message_from_http_response(response, message_is_status_code_if_null=False):
+    error_message = ""
+    try:
+        error_response = response.json()
+        if 'message' in error_response:
+            error_message = error_response['message']
+        elif 'error' in error_response:
+            error_message = error_response['error']
+    except (JSONDecodeError, simpleJsonDecodeError):
+        error_message = response.text
+    if (error_message is None or error_message == "" or len(error_message) < 1) and message_is_status_code_if_null:
+        return http_responses[response.status_code]
+    return error_message

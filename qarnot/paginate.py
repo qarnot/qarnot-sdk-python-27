@@ -1,5 +1,4 @@
-
-class PaginateResponse:
+class PaginateResponse(object):
     """A paginate response
 
     :param is_truncated: Is the object truncated
@@ -19,7 +18,7 @@ class PaginateResponse:
         self.page_data = page_data
 
 
-class OffsetResponse:
+class OffsetResponse(object):
     """An offseet response
 
     :param total: the total number of data objects

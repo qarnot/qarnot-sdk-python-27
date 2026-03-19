@@ -3,7 +3,7 @@
 import qarnot
 import pytest
 from unittest import TestCase
-from unittest.mock import patch, Mock
+from mock import patch, Mock, PropertyMock
 import requests
 import simplejson
 
@@ -17,10 +17,12 @@ expected_and_or_tags_filter = {"operator": "And", "filters": [
         ]}
 
 class TestConnectionMethods(TestCase):
+    @pytest.mark.slow
     def test_connection_with_bad_ssl_return_the_good_exception(self):
         with pytest.raises(requests.exceptions.SSLError):
             assert qarnot.Connection(cluster_url="https://expired.badssl.com", client_token="token")
 
+    @pytest.mark.slow
     def test_connection_with_bad_ssl_and_uncheck_return_JSONDecodeError_exception(self):
         with pytest.raises(simplejson.errors.JSONDecodeError):
             assert qarnot.Connection(cluster_url="https://expired.badssl.com", client_token="token", cluster_unsafe=True)
@@ -28,9 +30,21 @@ class TestConnectionMethods(TestCase):
 class TestConnectionPaginateMethods():
     @patch("qarnot.connection.Connection._get")
     def get_connection(self, mock_get):
-        mock_get.return_value.status_code = 200
+        def fake_get(url, **kwargs):
+            resp = Mock()
+            resp.status_code = 200
+            if "settings" in url:
+                resp.json.return_value = {"storage": "https://localhost"}
+            elif "info" in url:
+                resp.json.return_value = {"email": "test@test.com"}
+            else:
+                resp.json.return_value = {}
+            return resp
+        mock_get.side_effect = fake_get
         connec = qarnot.Connection(
             client_token="token", cluster_url="https://localhost", storage_url="https://localhost")
+        mock_get.side_effect = None
+        mock_get.return_value.status_code = 200
         return connec
 
     def test_profiles_names(self):
@@ -39,45 +53,102 @@ class TestConnectionPaginateMethods():
             mock_get.return_value.status_code = 200
             mock_get.return_value.json.return_value = ["test1", "test2"]
             retriever = connec.profiles_names()
-            assert "/profiles" == mock_get.call_args.args[0]
+            assert "/profiles" == mock_get.call_args[0][0]
             assert retriever[0] == "test1" and retriever[1] == "test2"
 
     def test_profiles(self):
         connec = self.get_connection()
         with patch("qarnot.connection.Connection.profiles_names") as mock_names:
             with patch("qarnot.connection.Connection._get") as mock_get:
-                mock_names.return_value = ["hello"]
+                mock_names.return_value = ["hello01", "hello02", "hello03", "hello04", "hello05", "hello06", "hello07", "hello08", "hello09", "hello10", "hello11", "hello12", "hello13"]
                 mock_get.return_value.status_code = 200
                 mock_get.return_value.json.return_value = {"name":"world",
                                                            "constants": [{"name": "foo", "value": "bar"}, {"name": "foo2", "value": "bar2"}]}
                 retriever = connec.profiles()
-                assert "/profiles/hello" == mock_get.call_args.args[0]
-                assert retriever[0].name == "world" and retriever[0].constants == (('foo', 'bar'),('foo2', 'bar2'))
+                assert len(retriever) == 13
+                for ret in retriever:
+                    assert ret.name == "world" and ret.constants == (('foo', 'bar'),('foo2', 'bar2'))
+                for arg in mock_get.call_args_list:
+                    assert arg[0][0].startswith("/profiles/hello")
+
+    def test_profiles_with_internal_server_error(self):
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection.profiles_names") as mock_names:
+            with patch("qarnot.connection.Connection._get") as mock_get:
+                mock_names.return_value = ["hello01", "hello02", "hello03", "hello04", "hello05", "hello06", "hello07", "hello08", "hello09", "hello10", "hello11", "hello12", "hello13"]
+                mock_get.return_value.status_code = 503
+                mock_get.return_value.json.return_value = {"name":"world",
+                                                           "constants": [{"name": "foo", "value": "bar"}, {"name": "foo2", "value": "bar2"}]}
+                with pytest.raises(qarnot.QarnotGenericException):
+                    retriever = connec.profiles()
+
+    def test_profiles_with_not_found_error(self):
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection.profiles_names") as mock_names:
+            with patch("qarnot.connection.Connection._get") as mock_get:
+                mock_names.return_value = ["hello01", "hello02", "hello03", "hello04", "hello05", "hello06", "hello07", "hello08", "hello09", "hello10", "hello11", "hello12", "hello13"]
+                mock_get.return_value.status_code = 404
+                mock_get.return_value.json.return_value = {"name":"world",
+                                                           "constants": [{"name": "foo", "value": "bar"}, {"name": "foo2", "value": "bar2"}]}
+                retriever = connec.profiles()
+                assert mock_get.call_args[0][0].startswith("/profiles/hello")
+                assert len(retriever) == 0
+
+    def return_mock_status(self, *args, **kwargs):
+        errors = [1, 4, 6, 7, 12]
+        status = 404 if self.test_profiles_with_5_error_step in errors else 200
+        self.test_profiles_with_5_error_step += 1
+        mock = Mock()
+        type(mock).status_code = PropertyMock(return_value=status)
+        mock.json.return_value = {"name": "world",
+                                    "constants": [{"name": "foo", "value": "bar"}, {"name": "foo2", "value": "bar2"}]}
+        return mock
+
+    def test_profiles_with_5_not_found_error(self):
+        self.test_profiles_with_5_error_step = 0
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection.profiles_names") as mock_names:
+            with patch("qarnot.connection.Connection._get") as mock_get:
+                mock_names.return_value = ["hello01", "hello02", "hello03", "hello04", "hello05", "hello06", "hello07", "hello08", "hello09", "hello10", "hello11", "hello12", "hello13"]
+                mock_get.side_effect = self.return_mock_status
+                retriever = connec.profiles()
+                assert mock_get.call_args[0][0].startswith("/profiles/hello")
+                assert len(retriever) == 8
+
+    def test_profile_details(self):
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection._get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = {"name":"world",
+                                               "constants": [{"name": "foo", "value": "bar"}, {"name": "foo2", "value": "bar2"}]}
+            retriever = connec.profile_details("hello")
+            assert retriever.name == "world" and retriever.constants == (('foo', 'bar'),('foo2', 'bar2'))
+            assert "/profiles/hello" == mock_get.call_args[0][0]
 
     def test_paginate_task_retriever_url(self):
         connec = self.get_connection()
         with patch("qarnot.connection.Connection._page_call") as mock_page_call:
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
             retriever = connec.tasks_page(summary=False)
-            assert "/tasks/paginate" == mock_page_call.call_args.args[0]
+            assert "/tasks/paginate" == mock_page_call.call_args[0][0]
             retriever = connec.tasks_page(summary=True)
-            assert "/tasks/summaries/paginate" == mock_page_call.call_args.args[0]
+            assert "/tasks/summaries/paginate" == mock_page_call.call_args[0][0]
 
     def test_paginate_job_retriever_url(self):
         connec = self.get_connection()
         with patch("qarnot.connection.Connection._page_call") as mock_page_call:
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
             retriever = connec.jobs_page()
-            assert "/jobs/paginate" == mock_page_call.call_args.args[0]
+            assert "/jobs/paginate" == mock_page_call.call_args[0][0]
 
     def test_paginate_pool_retriever_url(self):
         connec = self.get_connection()
         with patch("qarnot.connection.Connection._page_call") as mock_page_call:
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
             retriever = connec.pools_page(summary=False)
-            assert "/pools/paginate" == mock_page_call.call_args.args[0]
+            assert "/pools/paginate" == mock_page_call.call_args[0][0]
             retriever = connec.pools_page(summary=True)
-            assert "/pools/summaries/paginate" == mock_page_call.call_args.args[0]
+            assert "/pools/summaries/paginate" == mock_page_call.call_args[0][0]
 
     @pytest.mark.parametrize("tags, tags_intersect, expected_filter", [
         (["tag1", "tag2"], None, expected_or_tags_filter),
@@ -90,7 +161,7 @@ class TestConnectionPaginateMethods():
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
 
             retriever = connec.tasks_page(tags=tags, tags_intersect=tags_intersect)
-            assert expected_filter == mock_page_call.call_args.args[1]["filter"]
+            assert expected_filter == mock_page_call.call_args[0][1]["filter"]
 
     @pytest.mark.parametrize("tags, tags_intersect, expected_filter", [
         (["tag1", "tag2"], None, expected_or_tags_filter),
@@ -103,7 +174,7 @@ class TestConnectionPaginateMethods():
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
 
             retriever = connec.jobs_page(tags=tags, tags_intersect=tags_intersect)
-            assert expected_filter == mock_page_call.call_args.args[1]["filter"]
+            assert expected_filter == mock_page_call.call_args[0][1]["filter"]
 
     @pytest.mark.parametrize("tags, tags_intersect, expected_filter", [
         (["tag1", "tag2"], None, expected_or_tags_filter),
@@ -115,10 +186,10 @@ class TestConnectionPaginateMethods():
         with patch("qarnot.connection.Connection._page_call") as mock_page_call:
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
             retriever = connec.pools_page(tags=tags, tags_intersect=tags_intersect)
-            print(mock_page_call.call_args.args[1]["filter"])
-            print(mock_page_call.call_args.args)
+            print(mock_page_call.call_args[0][1]["filter"])
+            print(mock_page_call.call_args[0])
             print(mock_page_call.call_args)
-            assert expected_filter == mock_page_call.call_args.args[1]["filter"]
+            assert expected_filter == mock_page_call.call_args[0][1]["filter"]
 
     @pytest.mark.parametrize("token, max, expected_token, expected_max", [
         ("token", 1, "token", 1),
@@ -130,8 +201,8 @@ class TestConnectionPaginateMethods():
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
 
             retriever = connec.tasks_page(token=token, maximum=max)
-            assert expected_token == mock_page_call.call_args.args[1]["token"]
-            assert expected_max == mock_page_call.call_args.args[1]["maximumResults"]
+            assert expected_token == mock_page_call.call_args[0][1]["token"]
+            assert expected_max == mock_page_call.call_args[0][1]["maximumResults"]
 
     @pytest.mark.parametrize("token, max, expected_token, expected_max", [
         ("token", 1, "token", 1),
@@ -143,8 +214,8 @@ class TestConnectionPaginateMethods():
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
 
             retriever = connec.jobs_page(token=token, maximum=max)
-            assert expected_token == mock_page_call.call_args.args[1]["token"]
-            assert expected_max == mock_page_call.call_args.args[1]["maximumResults"]
+            assert expected_token == mock_page_call.call_args[0][1]["token"]
+            assert expected_max == mock_page_call.call_args[0][1]["maximumResults"]
 
     @pytest.mark.parametrize("token, max, expected_token, expected_max", [
         ("token", 1, "token", 1),
@@ -155,8 +226,8 @@ class TestConnectionPaginateMethods():
         with patch("qarnot.connection.Connection._page_call") as mock_page_call:
             mock_page_call.return_value = {"token" : "token","nextToken" : "nextToken","isTruncated":True,"data":[]}
             retriever = connec.pools_page(token=token, maximum=max)
-            assert expected_token == mock_page_call.call_args.args[1]["token"]
-            assert expected_max == mock_page_call.call_args.args[1]["maximumResults"]
+            assert expected_token == mock_page_call.call_args[0][1]["token"]
+            assert expected_max == mock_page_call.call_args[0][1]["maximumResults"]
 
     def test_page_task_return_object(self):
         task_body = [{
@@ -383,7 +454,7 @@ class TestConnectionPaginateMethods():
                 next(iterator)
             assert mock_page_call.call_count == 2
 
-    def test_user_information(self):
+    def test_user_information_legacy_computing_quotas(self):
         connec = self.get_connection()
         with patch("qarnot.connection.Connection._get") as get_user:
             user_json = {
@@ -403,6 +474,119 @@ class TestConnectionPaginateMethods():
                 "runningPoolCount":17,
                 "runningInstanceCount":18,
                 "runningCoreCount":19,
+                "maxFlexInstances":20,
+                "maxFlexCores":21,
+                "runningFlexCoreCount":22,
+                "runningFlexInstanceCount":23,
+                "maxOnDemandInstances":24,
+                "maxOnDemandCores":25,
+                "runningOnDemandCoreCount":26,
+                "runningOnDemandInstanceCount":27,
+            }
+            get_user.return_value.status_code = 200
+            get_user.return_value.json.return_value = user_json
+            user = connec.user_info
+            assert user.email == user_json.get('email', '')
+            assert user.max_bucket == user_json['maxBucket']
+            assert user.bucket_count == user_json.get('bucketCount', -1)
+            assert user.quota_bytes_bucket == user_json['quotaBytesBucket']
+            assert user.used_quota_bytes_bucket == user_json['usedQuotaBytesBucket']
+            assert user.task_count == user_json['taskCount']
+            assert user.max_task == user_json['maxTask']
+            assert user.running_task_count == user_json['runningTaskCount']
+            assert user.max_running_task == user_json['maxRunningTask']
+            assert user.max_instances == user_json['maxInstances']
+            assert user.max_cores == user_json['maxFlexCores']
+            assert user.max_pool == user_json['maxPool']
+            assert user.pool_count == user_json['poolCount']
+            assert user.max_running_pool == user_json['maxRunningPool']
+            assert user.running_pool_count == user_json['runningPoolCount']
+            assert user.running_instance_count == user_json['runningInstanceCount']
+            assert user.running_core_count == user_json['runningCoreCount']
+            assert user.max_flex_instances == user_json['maxFlexInstances']
+            assert user.max_flex_cores == user_json['maxFlexCores']
+            assert user.max_on_demand_instances == user_json['maxOnDemandInstances']
+            assert user.max_on_demand_cores == user_json['maxOnDemandCores']
+
+            assert user.computing_quotas.user.flex.max_instances == user_json['maxFlexInstances']
+            assert user.computing_quotas.user.flex.max_cores == user_json['maxFlexCores']
+            assert user.computing_quotas.user.flex.running_cores_count == user_json['runningFlexCoreCount']
+            assert user.computing_quotas.user.flex.running_instances_count == user_json['runningFlexInstanceCount']
+            assert user.computing_quotas.user.on_demand.max_instances == user_json['maxOnDemandInstances']
+            assert user.computing_quotas.user.on_demand.max_cores == user_json['maxOnDemandCores']
+            assert user.computing_quotas.user.on_demand.running_cores_count == user_json['runningOnDemandCoreCount']
+            assert user.computing_quotas.user.on_demand.running_instances_count == user_json['runningOnDemandInstanceCount']
+            assert user.computing_quotas.user.reserved == []
+
+    def test_user_information_new_format_computing_quotas(self):
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection._get") as get_user:
+            user_json = {
+                "email":"",
+                "maxBucket":5,
+                "bucketCount":6,
+                "quotaBytesBucket":7,
+                "usedQuotaBytesBucket":8,
+                "taskCount":9,
+                "maxTask":10,
+                "runningTaskCount":11,
+                "maxRunningTask":12,
+                "maxInstances":13,
+                "maxPool":14,
+                "poolCount":15,
+                "maxRunningPool":16,
+                "runningPoolCount":17,
+                "runningInstanceCount":18,
+                "runningCoreCount":19,
+                "computingQuotas": {
+                    "user": {
+                        "flex": {
+                            "maxInstances": 64,
+                            "maxCores": 512,
+                            "runningInstancesCount": 1,
+                            "runningCoresCount": 2
+                        },
+                        "onDemand": {
+                            "maxInstances": 642,
+                            "maxCores": 5122,
+                            "runningInstancesCount": 3,
+                            "runningCoresCount": 4
+                        },
+                        "reserved": [
+                            {
+                                "machineKey": "string",
+                                "maxInstances": 643,
+                                "maxCores": 5123,
+                                "runningInstancesCount": 5,
+                                "runningCoresCount": 6
+                            }
+                        ]
+                    },
+                    "organization": {
+                        "name": "string",
+                        "flex": {
+                            "maxInstances": 644,
+                            "maxCores": 5124,
+                            "runningInstancesCount": 7,
+                            "runningCoresCount": 8
+                        },
+                        "onDemand": {
+                            "maxInstances": 645,
+                            "maxCores": 5125,
+                            "runningInstancesCount": 9,
+                            "runningCoresCount": 10
+                        },
+                        "reserved": [
+                            {
+                                "machineKey": "string",
+                                "maxInstances": 646,
+                                "maxCores": 5126,
+                                "runningInstancesCount": 11,
+                                "runningCoresCount": 12
+                            }
+                        ]
+                    }
+                },
             }
             get_user.return_value.status_code = 200
             get_user.return_value.json.return_value = user_json
@@ -423,6 +607,47 @@ class TestConnectionPaginateMethods():
             assert user.running_pool_count == user_json['runningPoolCount']
             assert user.running_instance_count == user_json['runningInstanceCount']
             assert user.running_core_count == user_json['runningCoreCount']
+
+
+            assert user.computing_quotas.user.flex.max_instances == user_json['computingQuotas']['user']['flex']['maxInstances']
+            assert user.computing_quotas.user.flex.max_cores == user_json['computingQuotas']['user']['flex']['maxCores']
+            assert user.computing_quotas.user.flex.running_cores_count == user_json['computingQuotas']['user']['flex']['runningCoresCount']
+            assert user.computing_quotas.user.flex.running_instances_count == user_json['computingQuotas']['user']['flex']['runningInstancesCount']
+
+            assert user.computing_quotas.organization.on_demand.max_instances == user_json['computingQuotas']['organization']['onDemand']['maxInstances']
+            assert user.computing_quotas.organization.on_demand.max_cores == user_json['computingQuotas']['organization']['onDemand']['maxCores']
+            assert user.computing_quotas.organization.on_demand.running_cores_count == user_json['computingQuotas']['organization']['onDemand']['runningCoresCount']
+            assert user.computing_quotas.organization.on_demand.running_instances_count == user_json['computingQuotas']['organization']['onDemand']['runningInstancesCount']
+
+    def test_user_with_missing_information(self): # To ensure it doesn't throw when modifying a field in rest-computing side
+        connec = self.get_connection()
+        with patch("qarnot.connection.Connection._get") as get_user:
+            user_json = {
+            }
+            get_user.return_value.status_code = 200
+            get_user.return_value.json.return_value = user_json
+            user = connec.user_info
+            assert user.email == ''
+            assert user.max_bucket == None
+            assert user.bucket_count == -1
+            assert user.quota_bytes_bucket == None
+            assert user.used_quota_bytes_bucket == None
+            assert user.task_count == None
+            assert user.max_task == None
+            assert user.running_task_count == None
+            assert user.max_running_task == None
+            assert user.max_instances == None
+            assert user.max_cores == None
+            assert user.max_pool == None
+            assert user.pool_count == None
+            assert user.max_running_pool == None
+            assert user.running_pool_count == None
+            assert user.running_instance_count == -1
+            assert user.running_core_count == -1
+            assert user.max_flex_instances == None
+            assert user.max_flex_cores == None
+            assert user.max_on_demand_instances == None
+            assert user.max_on_demand_cores == None
 
     def test_user_hardware_constraints(self):
         connect = self.get_connection()
@@ -459,14 +684,20 @@ class TestConnectionPaginateMethods():
                 },
                 {
                     "discriminator": "GpuHardwareConstraint"
+                },
+                {
+                    "discriminator": "SSDHardwareConstraint"
+                },
+                {
+                    "discriminator": "NoSSDHardwareConstraint"
                 }],
                 "offset": 0,
                 "limit": 50,
-                "total": 8
+                "total": 10
             }
             get_hw_constraints.return_value.status_code = 200
             get_hw_constraints.return_value.json.return_value = hw_constraints_page_json
             ret = connect.hardware_constraints_page()
             assert ret.total == hw_constraints_page_json['total']
             assert ret.page_data != None
-            assert len(ret.page_data) == 8
+            assert len(ret.page_data) == 10

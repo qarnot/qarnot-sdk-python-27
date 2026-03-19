@@ -20,19 +20,23 @@ __all__ = ['QarnotException',
            'QarnotGenericException',
            'BucketStorageUnavailableException',
            'UnauthorizedException',
+           'MissingProfileException',
+           'MissingTaskInstanceException',
            'MissingTaskException',
+           'MissingPoolInstanceException',
            'MissingPoolException',
            'MaxTaskException',
            'MaxPoolException',
            'NotEnoughCreditsException',
            'MissingBucketException',
            'MaxJobException',
-           'MissingJobException']
+           'MissingJobException',
+           'SecretNotFoundException',
+           'SecretConflictException']
 
 
 class QarnotException(Exception):
     """Qarnot Exception"""
-    pass
 
 
 class QarnotGenericException(QarnotException):
@@ -43,49 +47,59 @@ class QarnotGenericException(QarnotException):
 
 class BucketStorageUnavailableException(QarnotException):
     """API bucket storage is disabled."""
-    pass
 
 
 class UnauthorizedException(QarnotException):
     """Invalid token."""
-    pass
+
+
+class MissingProfileException(QarnotException):
+    """Non existent profile."""
+
+
+class MissingTaskInstanceException(QarnotException):
+    """Non existent instance for task."""
 
 
 class MissingTaskException(QarnotException):
     """Non existent task."""
-    pass
 
 
 class MissingBucketException(QarnotException):
     """Non existent bucket."""
-    pass
+
+
+class MissingPoolInstanceException(QarnotException):
+    """Non existent instance for pool."""
 
 
 class MissingPoolException(QarnotException):
     """Non existent pool."""
-    pass
 
 
 class MaxTaskException(QarnotException):
     """Max number of tasks reached."""
-    pass
 
 
 class MaxPoolException(QarnotException):
     """Max number of pools reached."""
-    pass
 
 
 class NotEnoughCreditsException(QarnotException):
     """Not enough credits exception."""
-    pass
 
 
 class MissingJobException(Exception):
-    """Non existentjob."""
-    pass
+    """Non existent job."""
 
 
 class MaxJobException(Exception):
     """Max number of jobs reached."""
-    pass
+
+
+class SecretNotFoundException(Exception):
+    """Requested secret was not found."""
+
+
+class SecretConflictException(Exception):
+    """Secret already exists."""

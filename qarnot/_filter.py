@@ -12,28 +12,198 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-def concat_and_filters(filters):
-    """Task for an AND filter list
-    For more information see the API documentation
 
-    :param filters: the filter list to be concat
-    :type filters: List
-    :return: A Json filter formated
-    :rtype: Dict
+class Filters(object):
+    """The qarnot advance filtering methods
     """
-    return {"operator": "And", "filters": filters}
+    @staticmethod
+    def data_detail(filters=None, select=None, maximum_results=None):
+        """The qarnot data detail filter,
+        it allow to filter the task, pools and jobs and select the fields to be retrieve.
+        It is not compatible with the pagination.
 
+        :param filters: the filtering option, defaults to None
+        :type filters: Dict, optional
+        :param select: a list of fields to retrieve, defaults to None
+        :type select: List[str], optional
+        :param maximum_results: [description], defaults to None
+        :type maximum_results: int, optional
+        :return: The data detail objet
+        :rtype: Dict
+        """
+        return {
+            "filter": filters,
+            "select": select,
+            "maximumResults": maximum_results,
+        }
 
-def concat_or_filters(filters):
-    """Task for an OR filter list
-    For more information see the API documentation
+    @staticmethod
+    def node_or(filters):
+        """Filter for checking an OR filter list
+        For more information see the API documentation
 
-    :param filters: the filter list to be concat
-    :type filters: List
-    :return: A Json filter formated
-    :rtype: Dict
-    """
-    return {"operator": "Or", "filters": filters}
+        :param filters: the filter list to be concat
+        :type filters: List
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {"operator": "Or", "filters": filters}
+
+    @staticmethod
+    def node_and(filters):
+        """Filter for checking an AND filter list
+        For more information see the API documentation
+
+        :param filters: the filter list to be concat
+        :type filters: List
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {"operator": "And", "filters": filters}
+
+    @staticmethod
+    def equal(field, value):
+        """Filter to get objects with the field value equal to `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "Equal",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def not_equal(field, value):
+        """Filter to get objects with field value different from `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "NotEqual",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def inside(field, value):
+        """Filter to get objects with `value` inside the field value
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the values to be check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "In",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def not_inside(field, value):
+        """Filter to get objects with `value` not inside the field value
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the values to be check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "NotIn",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def less_or_equal(field, value):
+        """Filter to get objects with the field value lower or equal to `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "LessThanOrEqual",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def less(field, value):
+        """Filter to get objects with the field value lower to `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "LessThan",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def greater_or_equal(field, value):
+        """Filter to get objects with the field value greater or equal to `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "GreaterThanOrEqual",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def greater(field, value):
+        """Filter to get objects with the field value greater to `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "GreaterThan",
+            "field": field,
+            "value": value
+        }
+
+    @staticmethod
+    def like(field, value):
+        """Filter to get objects with the field value matching the regex `value`
+        For more information see the API documentation
+
+        :param str field: the field to be check
+        :param str value: the regex value to check
+        :return: A Json filter formated
+        :rtype: Dict
+        """
+        return {
+            "operator": "Like",
+            "field": field,
+            "value": value
+        }
 
 
 def concat_filters(filters, exclude_filter=True):
@@ -50,7 +220,7 @@ def concat_filters(filters, exclude_filter=True):
         return None
     if len(filters) == 1:
         return filters[0]
-    return concat_and_filters(filters) if (exclude_filter) else concat_or_filters(filters)
+    return Filters.node_and(filters) if (exclude_filter) else Filters.node_or(filters)
 
 
 def all_tag_filter(tags):
@@ -63,22 +233,8 @@ def all_tag_filter(tags):
     if not isinstance(tags, list):
         tags = [tags]
     if len(tags) == 1:
-        return {
-            "operator": "Equal",
-            "field": "Tags",
-            "value": tags[0]
-        }
-    tag_selector = {
-        "operator": "And",
-        "filters":
-        [
-            {
-                "operator": "Equal",
-                "field": "Tags",
-                "value": tag_value
-            } for tag_value in tags
-        ]
-    }
+        return Filters.equal("Tags", tags[0])
+    tag_selector = Filters.node_and([Filters.equal("Tags", tag_value) for tag_value in tags])
     return tag_selector
 
 
@@ -92,21 +248,11 @@ def or_tag_filter(tags):
     if not isinstance(tags, list):
         tags = [tags]
     if len(tags) == 1:
-        return {
-            "operator": "Equal",
-            "field": "Tags",
-            "value": tags[0]
-        }
+        return Filters.equal("Tags", tags[0])
     tag_selector = {
         "operator": "Or",
         "filters":
-        [
-            {
-                "operator": "Equal",
-                "field": "Tags",
-                "value": tag_value
-            } for tag_value in tags
-        ]
+        [Filters.equal("Tags", tag_value) for tag_value in tags]
     }
     return tag_selector
 

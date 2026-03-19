@@ -12,6 +12,11 @@ official version targetting Python 3.6+ linked above.
 Disclaimers
 ###########
 
+Code Quality
+************
+This repository is provided without any guarantee.
+Part of the code was generated using AI tools.
+
 
 Python 2.7 end-of-life
 **********************

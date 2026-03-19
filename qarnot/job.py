@@ -23,7 +23,7 @@ from . import get_url, raise_on_error, _util
 from .exceptions import MaxJobException, NotEnoughCreditsException, MissingJobException, UnauthorizedException
 
 
-class JobState:
+class JobState(object):
     Active = "Active"
     Terminating = "Terminating"
     Completed = "Completed"
@@ -42,7 +42,7 @@ class Job(object):
         """Create a new :class:`Job`.
 
         :param connection: the cluster on which to send the job
-        :type connection: :class:`qarnot.connection.Connection`
+        :type connection: :class:`~qarnot.connection.Connection`
         :param name: given name of the job
         :type name: :class:`str`
         :param pool: which Pool to submit the job in,
@@ -50,7 +50,10 @@ class Job(object):
         :param shortname: userfriendly job name
         :type shortname: :class:`str`
         :param use_dependencies: allow dependencies between tasks in this job
-        :type job: :class:`bool`
+        :type use_dependencies: :class:`bool`
+
+        :param logger: which job to attach the task to
+        :type logger: :class:`logging.Logger`
         """
         self._connection = connection
         self._name = name
@@ -71,9 +74,13 @@ class Job(object):
         self._last_auto_update_state = self._auto_update
         self._tags = []
 
+        self._last_modified = None
         self._last_cache = time.time()
         self._completion_time_to_live = "00:00:00"
         self._auto_delete = False
+        self._previous_state = None
+        self._state_transition_time = None
+        self._previous_state_transition_time = None
 
     @property
     def auto_update(self):
@@ -134,12 +141,14 @@ class Job(object):
         :getter: Returns this job tasks
 
         The tasks submitted in this job.
+
+        .. note:: The tasks need to be actually submitted with :meth:`.Task.submit` to be recognized and displayed by the method :meth:`~qarnot.job.Job.tasks`
         """
         if self._uuid is None:
             return
         response = self._connection._get(get_url('job tasks', uuid=self._uuid))
         if response.status_code == 404:
-            raise MissingJobException(response.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(response))
         raise_on_error(response)
         return [Task.from_json(self, task, True) for task in response.json()]
 
@@ -230,7 +239,7 @@ class Job(object):
 
         The job's maximum wall time.
         It is a time span string.
-        Format example: 'd.hh:mm:ss' or 'hh:mm:ss'
+        Format example: ``d.hh:mm:ss`` or ``hh:mm:ss``
 
         Can be set until job is submitted.
         """
@@ -238,7 +247,7 @@ class Job(object):
 
     @max_wall_time.setter
     def max_wall_time(self, value):
-        """Setter for maximum wall time. In time span format example : 'd.hh:mm:ss' or 'hh:mm:ss' """
+        """Setter for maximum wall time. In time span format example : ``d.hh:mm:ss`` or ``hh:mm:ss`` """
         if self._uuid is not None:
             raise AttributeError("can't set attribute on a submitted job")
         elif _util.is_string(value):
@@ -246,7 +255,7 @@ class Job(object):
         elif isinstance(value, datetime.timedelta):
             self._max_wall_time = _util.convert_timedelta_to_timespan_string(value)
         else:
-            raise TypeError("Maximum wall time must be a time span format string (example: 'd.hh:mm:ss' or 'hh:mm:ss')")
+            raise TypeError("Maximum wall time must be a time span format string (example: ``d.hh:mm:ss`` or ``hh:mm:ss`` )")
 
     @property
     def pool(self):
@@ -270,7 +279,6 @@ class Job(object):
 
     @staticmethod
     def _retrieve(connection, uuid):
-        resp = connection._get(get_url('job update', uuid=uuid))
         """Retrieve a submitted job given its uuid.
 
         :param qarnot.connection.Connection connection:
@@ -280,12 +288,13 @@ class Job(object):
         :rtype: Job
         :returns: The retrieved job.
 
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.MissingJobException: no such job
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.MissingJobException: no such job
         """
+        resp = connection._get(get_url('job update', uuid=uuid))
         if resp.status_code == 404:
-            raise MissingJobException(resp.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(resp))
         raise_on_error(resp)
         return Job.from_json(connection, resp.json())
 
@@ -298,19 +307,19 @@ class Job(object):
         :returns: The created :class:`~qarnot.job.Job`.
         """
         job = cls(connection,
-                  payload["name"],
-                  payload["poolUuid"],
-                  payload["shortname"],
-                  payload["useDependencies"])
+                  payload.get("name"),
+                  payload.get("poolUuid"),
+                  payload.get("shortname"),
+                  payload.get("useDependencies"))
 
-        job._uuid = payload["uuid"]
-        job._state = payload["state"]
-        job._creation_date = payload["creationDate"]
-        job._last_modified = payload["lastModified"]
-        job._max_wall_time = _util.parse_timedelta(payload["maxWallTime"])
+        job._uuid = payload.get("uuid")
+        job._state = payload.get("state")
+        job._creation_date = payload.get("creationDate")
+        job._last_modified = payload.get("lastModified")
+        job._max_wall_time = _util.parse_timedelta(payload.get("maxWallTime"))
 
-        job._auto_delete = payload["autoDeleteOnCompletion"]
-        job._completion_time_to_live = payload["completionTimeToLive"]
+        job._auto_delete = payload.get("autoDeleteOnCompletion")
+        job._completion_time_to_live = payload.get("completionTimeToLive")
         return job
 
     def _to_json(self):
@@ -331,25 +340,27 @@ class Job(object):
 
     def _update(self, json_job):
         """Update this job from retrieved info."""
-        self._uuid = json_job['uuid']
-        self._name = json_job['name']
+        self._uuid = json_job.get('uuid')
+        self._name = json_job.get('name')
         self._shortname = json_job.get('shortname')
         self._pool_uuid = json_job.get('poolUuid')
         self._use_dependencies = json_job.get('useDependencies')
-        self._state = json_job['state']
-        self._creation_date = _util.parse_datetime(json_job['creationDate'])
+        self._state = json_job.get('state')
+        self._creation_date = _util.parse_datetime(json_job.get('creationDate'))
         self._last_modified = json_job.get('lastModified')
         self._max_wall_time = json_job.get('maxWallTime')
-        self._creation_date = _util.parse_datetime(json_job['creationDate'])
         self._tags = json_job.get('tags', None)
+        self._previous_state = json_job.get('previousState', None)
+        self._state_transition_time = json_job.get('stateTransitionTime', None)
+        self._previous_state_transition_time = json_job.get('previousStateTransitionTime', None)
 
     def submit(self):
         """Submit job to the cluster if it is not already submitted.
 
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.MaxJobException: Job quota reached
-        :raises qarnot.exceptions.NotEnoughCreditsException: Not enough credits
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.MaxJobException: Job quota reached
+        :raises ~qarnot.exceptions.NotEnoughCreditsException: Not enough credits
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
         """
         if self._uuid is not None and self._uuid != "":
             return self._state
@@ -357,13 +368,16 @@ class Job(object):
         resp = self._connection._post(get_url('jobs'), json=payload)
 
         if resp.status_code == 404:
-            raise MissingJobException(resp.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(resp))
         elif resp.status_code == 403:
-            raise MaxJobException(resp.json()['message'])
+            error_message = _util.get_error_message_from_http_response(resp)
+            if "maximum number of jobs reached" in error_message.lower():
+                raise MaxJobException(error_message)
+            raise UnauthorizedException(error_message)
         elif resp.status_code == 402:
-            raise NotEnoughCreditsException(resp.json()['message'])
+            raise NotEnoughCreditsException(_util.get_error_message_from_http_response(resp))
         raise_on_error(resp)
-        self._uuid = resp.json()['uuid']
+        self._uuid = resp.json().get('uuid')
         self.update(True)
 
     def update(self, flushcache=False):
@@ -373,9 +387,9 @@ class Job(object):
         will be served when accessing properties of the object.
         Cache behavior is configurable with :attr:`auto_update` and :attr:`update_cache_time`.
 
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.MissingJobException: job does not exist
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.MissingJobException: job does not exist
         """
         if self._uuid is None:
             return
@@ -387,7 +401,7 @@ class Job(object):
         resp = self._connection._get(
             get_url('job update', uuid=self._uuid))
         if resp.status_code == 404:
-            raise MissingJobException(resp.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(resp))
 
         raise_on_error(resp)
         self._update(resp.json())
@@ -396,16 +410,16 @@ class Job(object):
     def terminate(self):
         """Terminate this job on the server and abort all remaining tasks in the job.
 
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.MissingJobException: job does not exist
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.MissingJobException: job does not exist
         """
 
         if self._uuid is None:
             return
         resp = self._connection._post(get_url('job terminate', uuid=self._uuid))
         if resp.status_code == 404:
-            raise MissingJobException(resp.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(resp))
         raise_on_error(resp)
         self._state = JobState.Terminating
 
@@ -414,19 +428,19 @@ class Job(object):
 
         The forceAbort parameter can be used to force running task in the job to be aborted,
 
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.UnauthorizedException: job still contains running tasks
-        :raises qarnot.exceptions.MissingJobException: job does not exist
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.UnauthorizedException: job still contains running tasks
+        :raises ~qarnot.exceptions.MissingJobException: job does not exist
         """
 
         if self._uuid is None:
             return
         resp = self._connection._delete(get_url('job delete', uuid=self._uuid, force=forceAbort))
         if resp.status_code == 404:
-            raise MissingJobException(resp.json()['message'])
+            raise MissingJobException(_util.get_error_message_from_http_response(resp))
         elif resp.status_code == 403:
-            raise UnauthorizedException(resp.json()['message'])
+            raise UnauthorizedException(_util.get_error_message_from_http_response(resp))
         raise_on_error(resp)
         self._state = JobState.Deleting
         self._uuid = None
@@ -468,7 +482,7 @@ class Job(object):
 
         :raises AttributeError: if you try to set it after the job is submitted
 
-        The `completion_ttl` must be a timedelta or a time span format string (example: 'd.hh:mm:ss' or 'hh:mm:ss')
+        The `completion_ttl` must be a timedelta or a time span format string (example: ``d.hh:mm:ss`` or ``hh:mm:ss`` )
         """
         return self._completion_time_to_live
 
@@ -487,7 +501,6 @@ class Job(object):
 
         Custom tags.
         """
-        self._update_if_summary()
         if self._auto_update:
             self.update()
 
@@ -496,8 +509,37 @@ class Job(object):
     @tags.setter
     def tags(self, value):
         """Setter for tags"""
+        if self._auto_update:
+            self.update()
         self._tags = value
-        self._auto_update = False
+
+    @property
+    def previous_state(self):
+        """
+        :type: :class:`str`
+        :getter: Returns the running job's previous state
+        """
+        return self._previous_state
+
+    @property
+    def state_transition_time(self):
+        """
+        :type: :class:`str`
+        :getter: Returns the running job's transition state time
+
+        job state transition time (UTC Time)
+        """
+        return self._state_transition_time
+
+    @property
+    def previous_state_transition_time(self):
+        """
+        :type: :class:`str`
+        :getter: Returns the running job's previous transition state time
+
+        job previous state transition time (UTC Time)
+        """
+        return self._previous_state_transition_time
 
     def __repr__(self):
         return '{0} - {1} - {2} - Pool : {3} - {4} - Tags: {5} - UseDependencies : {6} '\

@@ -16,61 +16,91 @@
 # limitations under the License.
 
 
-from .exceptions import QarnotGenericException
+from .exceptions import QarnotGenericException, SecretConflictException, SecretNotFoundException, UnauthorizedException
+from ._util import get_error_message_from_http_response
 
 __all__ = ["task", "connection", "bucket", "pool",
-           "storage", "status", "job", "advanced_bucket", "hardware_constraint"]
+           "storage", "status", "job", "advanced_bucket", "hardware_constraint", "scheduling_type"]
 
 
 def raise_on_error(response):
     if response.status_code == 503:
         raise QarnotGenericException("Service Unavailable")
+    if response.status_code == 403:
+        raise UnauthorizedException(get_error_message_from_http_response(response))
     if response.status_code < 200 or response.status_code >= 300:
         try:
-            raise QarnotGenericException(response.json()['message'])
-        except ValueError:
+            raise QarnotGenericException(get_error_message_from_http_response(response, True))
+        except ValueError as value:
             raise QarnotGenericException(response.text)
+
+
+def raise_on_secrets_specific_error(response):
+    if response.status_code == 404:
+        raise SecretNotFoundException()
+    if response.status_code == 409:
+        raise SecretConflictException()
 
 
 def get_url(key, **kwargs):
     """Get and format the url for the given key.
     """
     urls = {
-        'jobs': u'/jobs/',  # POST -> Submit Job
-        'paginate jobs': u'/jobs/paginate',  # GET -> paginate jobs
-        'job update': u'/jobs/{uuid}',  # GET -> result; DELETE -> abort
-        'job delete': u'/jobs/{uuid}?force={force}',  # DELETE -> delete job
-        'jobs search': u'/jobs/search',  # POST -> make a custom search on jobs
-        'job terminate': u'/jobs/{uuid}/terminate',  # POST -> terminate a job
-        'job tasks': u'/jobs/{uuid}/tasks',  # GET -> tasks in job
-        'tasks': u'/tasks',  # POST -> submit task
-        'paginate tasks': u'/tasks/paginate',  # GET -> paginate tasks
-        'paginate tasks summaries': u'/tasks/summaries/paginate',  # GET -> paginate tasks summaries;
-        'tasks search': u'/tasks/search',  # POST -> make a custom search on tasks
-        'task force': u'/tasks/force',  # POST -> force add
-        'task update': u'/tasks/{uuid}',  # GET->result; DELETE -> abort, PATCH -> update resources
-        'task snapshot': u'/tasks/{uuid}/snapshot/periodic',  # POST -> snapshots
-        'task instant': u'/tasks/{uuid}/snapshot',  # POST -> get a snapshot
-        'task stdout': u'/tasks/{uuid}/stdout',  # GET -> task stdout
-        'task stderr': u'/tasks/{uuid}/stderr',  # GET -> task stderr
-        'task abort': u'/tasks/{uuid}/abort',  # GET -> task
-        'pools': u'/pools',  # POST -> submit pool
-        'paginate pools': u'/pools/paginate',  # GET -> paginate pools
-        'paginate pools summaries': u'/pools/summaries/paginate',  # GET -> paginate pools summaries
-        'pools search': u'/pools/search',  # POST -> make a custom search on pools
-        'pool close': u'/pools/{uuid}/close',  # POST -> close pool
-        'pool update': u'/pools/{uuid}',  # GET -> pool, DELETE -> close & delete
-        'user': u'/info',  # GET -> user info
-        'profiles': u'/profiles',  # GET -> profiles list
-        'profile details': u'/profiles/{profile}',  # GET -> profile details
-        'hardware constraints': u'/hardware-constraints',  # GET -> user hardware constraints list
-        'settings': u'/settings',  # GET -> instance settings
+        'jobs': '/jobs/',  # POST -> Submit Job
+        'paginate jobs': '/jobs/paginate',  # GET -> paginate jobs
+        'job update': '/jobs/{uuid}',  # GET -> result; DELETE -> abort
+        'job delete': '/jobs/{uuid}?force={force}',  # DELETE -> delete job
+        'jobs search': '/jobs/search',  # POST -> make a custom search on jobs
+        'job terminate': '/jobs/{uuid}/terminate',  # POST -> terminate a job
+        'job tasks': '/jobs/{uuid}/tasks',  # GET -> tasks in job
+        'tasks': '/tasks',  # POST -> submit task
+        'paginate tasks': '/tasks/paginate',  # GET -> paginate tasks
+        'paginate tasks summaries': '/tasks/summaries/paginate',  # GET -> paginate tasks summaries;
+        'tasks search': '/tasks/search',  # POST -> make a custom search on tasks
+        'task force': '/tasks/force',  # POST -> force add
+        'task update': '/tasks/{uuid}',  # GET->result; DELETE -> abort, PATCH -> update resources
+        'task snapshot': '/tasks/{uuid}/snapshot/periodic',  # POST -> snapshots
+        'task instant': '/tasks/{uuid}/snapshot',  # POST -> get a snapshot
+        'task instant status': '/tasks/{uuid}/snapshot/{snapshotId}',  # GET -> get a snapshot status
+        'task stdout': '/tasks/{uuid}/stdout',  # GET -> task stdout
+        'task stderr': '/tasks/{uuid}/stderr',  # GET -> task stderr
+        'task instance stdout': '/tasks/{uuid}/stdout/{instanceId}',  # GET -> task instance stdout
+        'task instance stderr': '/tasks/{uuid}/stderr/{instanceId}',  # GET -> task instance stderr
+        'task abort': '/tasks/{uuid}/abort',  # POST -> abort task
+        'task carbon facts': '/carbon/v1/tasks/{uuid}/carbon-facts',  # GET -> task carbon facts
+        'pools': '/pools',  # POST -> submit pool
+        'paginate pools': '/pools/paginate',  # GET -> paginate pools
+        'paginate pools summaries': '/pools/summaries/paginate',  # GET -> paginate pools summaries
+        'pools search': '/pools/search',  # POST -> make a custom search on pools
+        'pool close': '/pools/{uuid}/close',  # POST -> close pool
+        'pool update': '/pools/{uuid}',  # GET -> pool, DELETE -> close & delete, PATCH -> update resources
+        'pool stdout': '/pools/{uuid}/stdout',  # GET -> pool stdout
+        'pool stderr': '/pools/{uuid}/stderr',  # GET -> pool stderr
+        'pool instance stdout': '/pools/{uuid}/stdout/{instanceId}',  # GET -> pool instance stdout
+        'pool instance stderr': '/pools/{uuid}/stderr/{instanceId}',  # GET -> pool instance stderr
+        'pool carbon facts': '/carbon/v1/pools/{uuid}/carbon-facts',  # GET -> pool carbon facts
+        'secrets data': '/secrets-manager/data/{secret_key}',  # GET -> get secret , PUT -> create secret, PATCH -> update secret, DELETE -> delete secret
+        'secrets search': '/secrets-manager/search/{secret_prefix}',  # GET -> lists secrets starting with prefix
+        'user': '/info',  # GET -> user info
+        'profiles': '/profiles',  # GET -> profiles list
+        'profile details': '/profiles/{profile}',  # GET -> profile details
+        'hardware constraints': '/hardware-constraints',  # GET -> user hardware constraints list
+        'cpu model constraints search': '/hardware-constraints/cpu-model-constraints/search',  # GET -> user hardware constraints list
+        'settings': '/settings',  # GET -> instance settings
     }
     return urls[key].format(**kwargs)
 
 
+def get_url_with_param(key, params, **kwargs):
+    if (params is None or len(params) == 0):
+        return get_url(key, **kwargs)
+    param_string = "&".join('{0}={1}'.format(key, value) for key, value in params.items())
+    return "{url}?{param}".format(url=get_url(key, **kwargs), param=param_string)
+
+
 from ._version import get_versions  # noqa
-__version__ = get_versions()['version']
+__version__ = get_versions()['version']  # type: ignore
 del get_versions
 
 from .connection import Connection  # noqa
+from .secrets import Secrets  # noqa

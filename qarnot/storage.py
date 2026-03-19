@@ -13,10 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# pylint: disable=W0613
 
 import inspect
 import os
 import os.path
+import deprecation
+from . import __version__
 
 
 class Storage(object):
@@ -29,9 +32,9 @@ class Storage(object):
         :param str output_dir: local directory for the retrieved files.
         :param progress: can be a callback (read,total,filename)  or True to display a progress bar
         :type progress: bool or function(float, float, str)
-        :raises qarnot.exceptions.MissingBucketException: the bucket is not on the server
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.MissingBucketException: the bucket is not on the server
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
 
         .. warning:: Will override *output_dir* content.
 
@@ -147,6 +150,9 @@ class Storage(object):
         """
         self._not_implemented()
 
+    @deprecation.deprecated(deprecated_in="2.6.0", removed_in="3.0",
+                            current_version=__version__,  # type: ignore
+                            details="Legacy function")
     def update(self, flush=None):
         """Update object from remote endpoint
 
@@ -154,6 +160,9 @@ class Storage(object):
         """
         self._not_implemented()
 
+    @deprecation.deprecated(deprecated_in="2.6.0", removed_in="3.0",
+                            current_version=__version__,  # type: ignore
+                            details="Legacy function")
     def flush(self):
         """Ensure all background uploads are complete
         """
@@ -164,7 +173,7 @@ class Storage(object):
         """x.__getitem__(y) <==> x[y]"""
         try:
             return self.get_file(filename)
-        except ValueError:
+        except ValueError as error:
             raise KeyError(filename)
 
     def __setitem__(self, remote, filename):
@@ -177,7 +186,7 @@ class Storage(object):
         """x.__delitem__(y) <==> del x[y]"""
         try:
             return self.delete_file(filename)
-        except ValueError:
+        except ValueError as error:
             raise KeyError(filename)
 
     def __contains__(self, item):

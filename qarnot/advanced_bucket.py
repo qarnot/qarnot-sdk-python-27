@@ -1,3 +1,4 @@
+import abc
 from . import _util
 
 # ********************************************************
@@ -5,28 +6,35 @@ from . import _util
 # ********************************************************
 
 
-class AbstractFiltering():
+class AbstractFiltering(object):
     """
     Abstract base class for resources filtering, allowing to select only a subset of a resources bucket as task resources.
     """
+    __metaclass__ = abc.ABCMeta
 
     name = 'abstractFiltering'
 
+    @abc.abstractmethod
     def to_json(self):
         """Get a dict ready to be json packed.
+
         :raises NotImplementedError: this is an abstract method, it should be overridden in child classes
         """
 
     @classmethod
+    @abc.abstractmethod
     def from_json(cls, json):
         """Static method called to create the class obj from a json object.
+
         :param json: the json elements of the class
         :type json: Dict
         :raises NotImplementedError: this is an abstaract method, override it in it's child classes.
         """
 
-    def sanitize_filter_paths(self):
+    @abc.abstractmethod
+    def sanitize_filter_paths(self, show_warnings):
         """Sanitize the filters bucket path by removing extra separators
+
         :raises NotImplementedError: this is an abstract method, it should be overridden in child classes
         """
 
@@ -35,7 +43,6 @@ class BucketPrefixFiltering(AbstractFiltering):
     """
         Allows to filter a resources bucket by name prefix. Only bucket files starting with the given prefix will be used as task resources.
     """
-
     name = 'prefixFiltering'
 
     def __init__(self, prefix):
@@ -44,6 +51,7 @@ class BucketPrefixFiltering(AbstractFiltering):
     @classmethod
     def from_json(cls, json):
         """Static method called to create the class obj from a json object.
+
         :param json: the json elements of the class
         :type json: `dict`
         """
@@ -55,8 +63,10 @@ class BucketPrefixFiltering(AbstractFiltering):
 
     def to_json(self):
         """Get a dict ready to be json packed.
+
         :return: the json elements of the class.
         :rtype: `dict`
+
         """
         return {
             "prefix": self.prefix
@@ -80,6 +90,7 @@ class Filtering(object):
 
     def append(self, filtering):
         """Add a new filtering object
+
         :param filtering: a filtering object of the bucket
         :type filtering: `AbstractFiltering`
         """
@@ -88,6 +99,7 @@ class Filtering(object):
     @classmethod
     def from_json(cls, json):
         """Create the class sub objects of a Filtering from a json.
+
         :param json: the json elements of the class
         :type json: `dict`
         """
@@ -114,26 +126,32 @@ class Filtering(object):
 # ********************************************************
 
 
-class AbstractResourcesTransformation():
+class AbstractResourcesTransformation(object):
     """
     Abstract base class for resources transformation, allowing to transform bucket objects before they are presented to the task as resources.
     """
+    __metaclass__ = abc.ABCMeta
 
     name = 'abstractResourcesTransformation'
 
+    @abc.abstractmethod
     def to_json(self):
         """Get a dict ready to be json packed.
         """
 
     @classmethod
+    @abc.abstractmethod
     def from_json(cls, json):
         """Static method called to create the class obj from a json object.
+
         :param json: the json elements of the class
         :type json: `dict`
         """
 
-    def sanitize_transformation_paths(self):
+    @abc.abstractmethod
+    def sanitize_transformation_paths(self, show_warnings):
         """Sanitize the bucket path by removing extra separators
+
         :raises NotImplementedError: this is an abstract method, it should be overridden in child classes
         """
 
@@ -142,11 +160,11 @@ class PrefixResourcesTransformation(AbstractResourcesTransformation):
     """
         Allows to remove a prefix from bucket files before they are presented to the task. During execution, the task will see files with paths stripped of the given prefix in its working directory.
     """
-
     name = 'stripPrefix'
 
     def __init__(self, prefix):
         """The PrefixResourcesTransformation constructor
+
         :param prefix: the prefix path of the resource bucket to be removed.
         :type prefix: `str`
         """
@@ -158,12 +176,13 @@ class PrefixResourcesTransformation(AbstractResourcesTransformation):
     @classmethod
     def from_json(cls, json):
         """Create a new instance of the class using the given json object.
+
         :param json: The Json object representation.
         :type json: `dict`
         :return: The PrefixResourcesTransformation new object
         :rtype: :class:`PrefixResourcesTransformation`
         """
-        return PrefixResourcesTransformation(json["prefix"])
+        return PrefixResourcesTransformation(json.get("prefix"))
 
     def to_json(self):
         """Get a dict ready to be json packed.
@@ -181,12 +200,12 @@ class ResourcesTransformation(object):
     """
         Groups the various object transformation on an advanced resources bucket.
     """
-
     def __init__(self):
         self._resource_transformers = {}
 
     def append(self, resource):
         """Add a new resource transformation object
+
         :param filtering: a filtering object of the bucket
         :type filtering: `AbstractResourcesTransformation`
         """
@@ -198,6 +217,7 @@ class ResourcesTransformation(object):
     @classmethod
     def from_json(cls, json):
         """Create the class sub objects of a ResourcesTransformation from a json.
+
         :param json: the json elements of the class
         :type json: `dict`
         """

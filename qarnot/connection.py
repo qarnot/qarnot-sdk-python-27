@@ -16,34 +16,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import get_url, raise_on_error, __version__
-from .hardware_constraint import HardwareConstraint
+import io
+import sys
+
+from qarnot.helper import Log
+
+from . import get_url, raise_on_error, __version__  # type: ignore
+from .hardware_constraint import HardwareConstraint, CpuModelHardware
 from .task import Task, BulkTaskResponse
 from .pool import Pool
 from .paginate import PaginateResponse, OffsetResponse
 from .bucket import Bucket
+from .computing_quotas import ComputingQuotas
 from .job import Job
 from ._filter import create_pool_filter, create_task_filter, create_job_filter
-from .exceptions import (QarnotGenericException, BucketStorageUnavailableException, UnauthorizedException,
+from ._retry import with_retry
+from .exceptions import (QarnotGenericException, BucketStorageUnavailableException, MissingProfileException,
                          MissingTaskException, MissingPoolException, MissingJobException)
+from ._util import get_error_message_from_http_response
 import requests
-import sys
 import warnings
 import os
-import time
 import boto3
+try:
+    import concurrent.futures
+    _HAS_CONCURRENT = True
+except ImportError:
+    _HAS_CONCURRENT = False
 import botocore
+import deprecation
 from json import dumps as json_dumps
-from requests.exceptions import ConnectionError
-if sys.version_info[0] >= 3:  # module renamed in py3
-    import configparser as config  # pylint: disable=import-error
-else:
-    import ConfigParser as config  # pylint: disable=import-error
-
+try:
+    import urllib3
+except ImportError:
+    urllib3 = None
+try:
+    import configparser as config
+except ImportError:
+    import ConfigParser as config
 
 #########
 # class #
 #########
+
 
 class Connection(object):
     """Represents the couple cluster/user to which submit tasks.
@@ -53,7 +68,7 @@ class Connection(object):
                  storage_url=None, storage_unsafe=False,
                  retry_count=5, retry_wait=1.0,
                  cluster_custom_certificate=None, storage_custom_certificate=None,
-                 sanitize_bucket_paths=True, show_bucket_warnings=True):
+                 sanitize_bucket_paths=True, show_bucket_warnings=True, logger=None):
         """Create a connection to a cluster with given config file, options or environment variables.
         Available environment variable are
         `QARNOT_CLUSTER_URL`, `QARNOT_CLUSTER_UNSAFE`, `QARNOT_CLUSTER_TIMEOUT` and `QARNOT_CLIENT_TOKEN`.
@@ -70,6 +85,8 @@ class Connection(object):
         :param float retry_wait: (optional) Retry on error wait time, progressive. (wait * (retry_count - retry_num). Default to 1s
         :param bool sanitize_bucket_paths: (optional) Flag to automatically sanitize bucket paths (remove extra slashes). Default to true
         :param bool show_bucket_warnings: (optional) Flag to show warnings of bucket paths sanitization. Default to true
+        :param logger: which job to attach the task to
+        :type logger: :class:`logging.Logger`
 
         Configuration sample:
 
@@ -88,6 +105,8 @@ class Connection(object):
            unsafe=False
 
         """
+        self.logger = logger if logger is not None else Log.get_logger_for_stream(sys.stdout, "stdout")
+        self.logger_stderr = logger if logger is not None else Log.get_logger_for_stream(sys.stderr, "stderr")  # to avoid breaking change of task stderr logs
         self._version = "qarnot-sdk-python/" + __version__
         self._http = requests.session()
         self._retry_count = retry_count
@@ -101,16 +120,18 @@ class Connection(object):
                 self.cluster = None
                 if fileconf.get('cluster_url'):
                     self.cluster = fileconf.get('cluster_url')
+                if fileconf.get('storage_url'):
+                    self.storage = fileconf.get('storage_url')
                 auth = fileconf.get('client_auth')
-                self.timeout = fileconf.get('cluster_timeout')
+                self.timeout = int(fileconf.get('cluster_timeout'))
                 if fileconf.get('cluster_unsafe'):
                     self._http.verify = False
                 elif fileconf.get('cluster_custom_certificate'):
                     self._http.verify = fileconf.get('cluster_custom_certificate')
             else:
                 cfg = config.ConfigParser()
-                with open(fileconf) as cfgfile:
-                    cfg.readfp(cfgfile)
+                with io.open(fileconf, "r", encoding="utf-8") as cfg_file:
+                    cfg.readfp(io.StringIO(cfg_file.read()))
 
                     self.cluster = None
                     if cfg.has_option('cluster', 'url'):
@@ -147,7 +168,14 @@ class Connection(object):
             auth = client_token
 
         if not self._http.verify:
-            requests.packages.urllib3.disable_warnings()
+            try:
+                import urllib3
+                urllib3.disable_warnings()
+            except (ImportError, AttributeError):
+                try:
+                    requests.packages.urllib3.disable_warnings()
+                except AttributeError:
+                    pass
 
         if self.cluster is None:
             self.cluster = os.getenv("QARNOT_CLUSTER_URL")
@@ -185,7 +213,10 @@ class Connection(object):
 
         user = self.user_info
         session = boto3.session.Session()
-        conf = botocore.config.Config(user_agent=self._version)
+        try:
+            conf = botocore.config.Config(user_agent=self._version, request_checksum_calculation="when_required")
+        except TypeError:
+            conf = botocore.config.Config(user_agent=self._version)
 
         should_verify_or_certificate_path = True
         if storage_unsafe:
@@ -206,6 +237,7 @@ class Connection(object):
                                             endpoint_url=self.storage,
                                             config=conf)
 
+    @with_retry
     def _get(self, url, **kwargs):
         """Perform a GET request on the cluster.
 
@@ -215,193 +247,82 @@ class Connection(object):
         :rtype: :class:`requests.Response`
         :returns: The response to the given request.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
 
         .. note:: Additional keyword arguments are passed to the underlying
            :func:`requests.Pool.get`.
         """
+        return self._http.get(self.cluster + url, timeout=self.timeout, **kwargs)
 
-        retry = self._retry_count
-        last_chance = False
-        while True:
-            try:
-                ret = self._http.get(self.cluster + url, timeout=self.timeout,
-                                     **kwargs)
-                if ret.ok:
-                    return ret
-                if ret.status_code == 401:
-                    raise UnauthorizedException()
-                if 400 <= ret.status_code <= 499:
-                    return ret
-                if last_chance:
-                    return ret
-            except ConnectionError:
-                if last_chance:
-                    raise
-            if retry > 0:
-                retry -= 1
-                time.sleep(self._retry_wait * (self._retry_count - retry))
-            else:
-                last_chance = True
-
+    @with_retry
     def _patch(self, url, json=None, **kwargs):
         """perform a PATCH request on the cluster
 
-        :param url: :class:`str`,
-          relative url of the file (according to the cluster url)
+        :param str url: relative url of the file (according to the cluster url)
         :param json: the data to json serialize and post
 
         :rtype: :class:`requests.Response`
         :returns: The response to the given request.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
 
         .. note:: Additional keyword arguments are passed to the underlying
            :attr:`requests.Pool.post()`.
         """
+        kwargs = Connection._prepare_json_payload(json, **(kwargs or {}))
+        return self._http.patch(self.cluster + url, timeout=self.timeout, **(kwargs or {}))
 
-        retry = self._retry_count
-        last_chance = False
-        while True:
-            try:
-                if json is not None:
-                    if 'headers' not in kwargs:
-                        kwargs['headers'] = dict()
-                    kwargs['headers']['Content-Type'] = 'application/json'
-                    kwargs['data'] = json_dumps(json)
-                ret = self._http.patch(self.cluster + url,
-                                       timeout=self.timeout, **kwargs)
-                if ret.ok:
-                    return ret
-                if ret.status_code == 401:
-                    raise UnauthorizedException()
-                if 400 <= ret.status_code <= 499:
-                    return ret
-                if last_chance:
-                    return ret
-            except ConnectionError:
-                if last_chance:
-                    raise
-            if retry > 0:
-                retry -= 1
-                time.sleep(self._retry_wait * (self._retry_count - retry))
-            else:
-                last_chance = True
-
-    def _post(self, url, json=None, *args, **kwargs):
+    @with_retry
+    def _post(self, url, json=None, **kwargs):
         """perform a POST request on the cluster
 
-        :param url: :class:`str`,
-          relative url of the file (according to the cluster url)
+        :param str url: relative url of the file (according to the cluster url)
         :param json: the data to json serialize and post
 
         :rtype: :class:`requests.Response`
         :returns: The response to the given request.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
 
         .. note:: Additional keyword arguments are passed to the underlying
            :attr:`requests.Pool.post()`.
         """
+        kwargs = Connection._prepare_json_payload(json, **(kwargs or {}))
+        return self._http.post(self.cluster + url, timeout=self.timeout, **kwargs)
 
-        retry = self._retry_count
-        last_chance = False
-        while True:
-            try:
-                if json is not None:
-                    if 'headers' not in kwargs:
-                        kwargs['headers'] = dict()
-                    kwargs['headers']['Content-Type'] = 'application/json'
-                    kwargs['data'] = json_dumps(json)
-                ret = self._http.post(self.cluster + url,
-                                      timeout=self.timeout, *args, **kwargs)
-                if ret.ok:
-                    return ret
-                if ret.status_code == 401:
-                    raise UnauthorizedException()
-                if 400 <= ret.status_code <= 499:
-                    return ret
-                if last_chance:
-                    return ret
-
-            except ConnectionError:
-                if last_chance:
-                    raise
-            if retry > 0:
-                retry -= 1
-                time.sleep(self._retry_wait * (self._retry_count - retry))
-            else:
-                last_chance = True
-
+    @with_retry
     def _delete(self, url, **kwargs):
         """Perform a DELETE request on the cluster.
 
-        :param url: :class:`str`,
-          relative url of the file (according to the cluster url)
+        :param str url: relative url of the file (according to the cluster url)
 
         :rtype: :class:`requests.Response`
         :returns: The response to the given request.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
 
         .. note:: Additional keyword arguments are passed to the underlying
           :attr:`requests.Pool.delete()`.
         """
+        return self._http.delete(self.cluster + url, timeout=self.timeout, **kwargs)
 
-        retry = self._retry_count
-        last_chance = False
-        while True:
-            try:
-                ret = self._http.delete(self.cluster + url,
-                                        timeout=self.timeout, **kwargs)
-                if ret.ok:
-                    return ret
-                if ret.status_code == 401:
-                    raise UnauthorizedException()
-                if 400 <= ret.status_code <= 499:
-                    return ret
-                if last_chance:
-                    return ret
-            except ConnectionError:
-                if last_chance:
-                    raise
-            if retry > 0:
-                retry -= 1
-                time.sleep(self._retry_wait * (self._retry_count - retry))
-            else:
-                last_chance = True
-
+    @with_retry
     def _put(self, url, json=None, **kwargs):
         """Performs a PUT on the cluster."""
+        kwargs = Connection._prepare_json_payload(json, **(kwargs or {}))
+        return self._http.put(self.cluster + url, timeout=self.timeout, **kwargs)
 
-        retry = self._retry_count
-        last_chance = False
-        while True:
-            try:
-                if json is not None:
-                    if 'headers' not in kwargs:
-                        kwargs['headers'] = dict()
-                    kwargs['headers']['Content-Type'] = 'application/json'
-                    kwargs['data'] = json_dumps(json)
-                ret = self._http.put(self.cluster + url,
-                                     timeout=self.timeout, **kwargs)
-                if ret.ok:
-                    return ret
-                if ret.status_code == 401:
-                    raise UnauthorizedException()
-                if 400 <= ret.status_code <= 499:
-                    return ret
-                if last_chance:
-                    return ret
+    @staticmethod
+    def _prepare_json_payload(json, **kwargs):
+        if json is None:
+            return kwargs
 
-            except ConnectionError:
-                if last_chance:
-                    raise
-            if retry > 0:
-                retry -= 1
-                time.sleep(self._retry_wait * (self._retry_count - retry))
-            else:
-                last_chance = True
+        if 'headers' not in kwargs:
+            kwargs['headers'] = dict()
+        kwargs['headers']['Content-Type'] = 'application/json'
+        kwargs['data'] = json_dumps(json)
+
+        return kwargs
 
     @property
     def s3client(self):
@@ -428,8 +349,8 @@ class Connection(object):
         :rtype: :class:`UserInfo`
         :returns: Requested information.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         resp = self._get(get_url('user'))
         raise_on_error(resp)
@@ -439,8 +360,10 @@ class Connection(object):
     def buckets(self):
         """Get the list of buckets.
 
-        :rtype: list(class:`~qarnot.bucket.Bucket`).
+        :rtype: list(:class:`~qarnot.bucket.Bucket`).
         :returns: List of buckets
+
+        :raises ~qarnot.exceptions.BucketStorageUnavailableException: the bucket storage engine is not available
         """
         if self._s3client is None:
             raise BucketStorageUnavailableException()
@@ -448,63 +371,77 @@ class Connection(object):
         buckets = [Bucket(self, x.name, create=False) for x in self._s3resource.buckets.all()]
         return buckets
 
+    @deprecation.deprecated(deprecated_in="2.5.0", removed_in="3.0",
+                            current_version=__version__,  # type: ignore
+                            details="Use the all_pools function instead")
     def pools(self, summary=True, tags_intersect=None, tags=None):
         """Get the list of pools stored on this cluster for this user.
 
         if tags and tags_intersect are set, the connection will only return the pools with tag intersect values.
+
         :param bool summary: only get the summaries.
         :param tags_intersect: Desired filtering tags, all of them
-        :type tags_intersect: list of :class:`str`, optional
+        :type tags_intersect: list of `str`, optional
         :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
+        :type tags: list of `str`, optional
 
         :rtype: List of :class:`~qarnot.pool.Pool`.
         :returns: Pools stored on the cluster owned by the user.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         .. deprecated:: 2.5.0
-        This function can be inefficient, Use :func:`all_pools` instead.
+          This function can be inefficient, Use :func:`all_pools` instead.
+
         """
         return list(self.all_pools(summary=summary, tags=tags, tags_intersect=tags_intersect))
 
+    @deprecation.deprecated(deprecated_in="2.5.0", removed_in="3.0",
+                            current_version=__version__,  # type: ignore
+                            details="Use the all_tasks function instead")
     def tasks(self, tags=None, summary=True, tags_intersect=None):
         """Get the list of tasks stored on this cluster for this user.
 
         if tags and tags_intersect are set, the connection will only return the tasks with tag_intersect values.
 
         :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
+        :type tags: list of `str`, optional
         :param bool summary: only get the summaries.
         :param tags_intersect: Desired filtering tags, all of them
-        :type tags_intersect: list of :class:`str`, optional
+        :type tags_intersect: list of `str`, optional
 
         :rtype: List of :class:`~qarnot.task.Task`.
         :returns: Tasks stored on the cluster owned by the user.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         .. deprecated:: 2.5.0
-        This function can be inefficient, Use :func:`all_tasks` instead.
+          This function can be inefficient, Use :func:`all_tasks` instead.
+
         """
         return list(self.all_tasks(summary=summary, tags=tags, tags_intersect=tags_intersect))
 
+    @deprecation.deprecated(deprecated_in="2.5.0", removed_in="3.0",
+                            current_version=__version__,  # type: ignore
+                            details="Use the all_jobs function instead")
     def jobs(self, tags=None, tags_intersect=None):
         """Get the list of jobs stored on this cluster for this user.
 
         if tags and tags_intersect are set, the connection will only return the jobs with tag intersect values.
-        :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
-        :param tags_intersect: Desired filtering tags, the jobs must have all of them
-        :type tags_intersect: list of :class:`str`, optional
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :param tags: Desired filtering tags, any of them
+        :type tags: list of `str`, optional
+        :param tags_intersect: Desired filtering tags, the jobs must have all of them
+        :type tags_intersect: list of `str`, optional
+
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         .. deprecated:: 2.5.0
-        This function can be inefficient, Use :func:`all_jobs` instead.
+          This function can be inefficient, Use :func:`all_jobs` instead.
+
         """
         return list(self.all_jobs(tags=tags, tags_intersect=tags_intersect))
 
@@ -512,17 +449,18 @@ class Connection(object):
         """Get an iterator of all the pools.
 
         if tags and tags_intersect are set, the connection will only return the pools with tag intersect values.
+
         :param bool summary: only get the summaries.
         :param tags_intersect: Desired filtering tags, all of them
-        :type tags_intersect: list of :class:`str`, optional
+        :type tags_intersect: list of `str`, optional
         :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
+        :type tags: list of `str`, optional
 
         :rtype: List of :class:`~qarnot.pool.Pool`.
         :returns: Pools stored on the cluster owned by the user.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         return self._all_pages(self.pools_page, summary=summary, tags=tags, tags_intersect=tags_intersect)
 
@@ -532,16 +470,16 @@ class Connection(object):
         if tags and tags_intersect are set, the connection will only return the tasks with tag_intersect values.
 
         :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
+        :type tags: list of `str`, optional
         :param bool summary: only get the summaries.
         :param tags_intersect: Desired filtering tags, all of them
-        :type tags_intersect: list of :class:`str`, optional
+        :type tags_intersect: list of `str`, optional
 
         :rtype: List of :class:`~qarnot.task.Task`.
         :returns: Tasks stored on the cluster owned by the user.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         return self._all_pages(self.tasks_page, summary=summary, tags=tags, tags_intersect=tags_intersect)
 
@@ -549,13 +487,14 @@ class Connection(object):
         """Get an iterator of all the jobs.
 
         if tags and tags_intersect are set, the connection will only return the jobs with tag intersect values.
-        :param tags: Desired filtering tags, any of them
-        :type tags: list of :class:`str`, optional
-        :param tags_intersect: Desired filtering tags, the jobs must have all of them
-        :type tags_intersect: list of :class:`str`, optional
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :param tags: Desired filtering tags, any of them
+        :type tags: list(`str`), optional
+        :param tags_intersect: Desired filtering tags, the jobs must have all of them
+        :type tags_intersect: list of `str`, optional
+
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         return self._all_pages(self.jobs_page, tags=tags, tags_intersect=tags_intersect)
 
@@ -580,8 +519,8 @@ class Connection(object):
     def all_hardware_constraints(self):
         """Get all the hardware constraints.
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         return self._all_offset_pages(self.hardware_constraints_page)
 
@@ -603,14 +542,14 @@ class Connection(object):
             for data in page.page_data:
                 yield data
 
-    def _paginate_request(self, filter, token, maximum):
+    def _paginate_request(self, filters, token, maximum):
         """A paginate request creator.
 
         :return: The json request to be call.
         :rtype: Dict
         """
         return {
-            "filter": filter,
+            "filter": filters,
             "token": token,
             "maximumResults": maximum
         }
@@ -629,8 +568,8 @@ class Connection(object):
     def _offset_call(self, url, params):
         """Call the api and return the response body of the GET request
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         :return: The response body
         :rtype: Dict
@@ -642,8 +581,8 @@ class Connection(object):
     def _page_call(self, url, request):
         """Call the api and return the response body
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         :return: The response body
         :rtype: Dict
@@ -653,64 +592,64 @@ class Connection(object):
         return response.json()
 
     def pools_page(self, token=None, maximum=None, summary=True, tags=None, tags_intersect=None):
-        """Return a paginate pool object retriver.
+        """Return a paginate pool object retriever.
 
-        :param summary: retrive a pool or a pool summary, defaults to True
-        :type summary: bool, optional
+        :param summary: retrieve a full pool details if False or a pool summary if True, defaults to True
+        :type summary: `bool`, optional
         :param tags_intersect: use a tag exclusive filter, defaults to None
-        :type tags_intersect: List, optional
+        :type tags_intersect: list of `str` , optional
         :param token: the first paginate token to be used, defaults to None
-        :type token: str, optional
+        :type token: `str`, optional
         :param maximum: the maximum number of pages to retrieve, defaults to 10
-        :type maximum: Union[int, None], optional
+        :type maximum: `int`, optional
         :return: A paginate object
-        :rtype: :class:`paginate.PaginateResponse`
+        :rtype: :class:`~qarnot.paginate.PaginateResponse`
         """
 
-        filter = create_pool_filter(tags=tags, tags_intersect=tags_intersect)
-        url = get_url('paginate pools summaries') if summary and filter is None else get_url('paginate pools')
-        result = self._page_call(url, self._paginate_request(filter, token, maximum))
-        data = [Pool.from_json(self, pool, summary) for pool in result["data"]]
-        return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
+        filters = create_pool_filter(tags=tags, tags_intersect=tags_intersect)
+        url = get_url('paginate pools summaries') if summary and filters is None else get_url('paginate pools')
+        result = self._page_call(url, self._paginate_request(filters, token, maximum))
+        data = [Pool.from_json(self, pool, summary) for pool in result.get("data")]
+        return PaginateResponse(token=result.get("token", token), next_token=result.get("nextToken"), is_truncated=result.get("isTruncated"), page_data=data)
 
     def tasks_page(self, token=None, maximum=None, summary=True, tags=None, tags_intersect=None):
         """Return a paginate task object.
 
-        :param summary: retrive a task or a task summary, defaults to True
-        :type summary: bool, optional
+        :param summary: retrieve a full task details if False or a task summary if True, defaults to True
+        :type summary: `bool`, optional
         :param tags_intersect: use a tag exclusive filter, defaults to None
-        :type tags_intersect: List, optional
+        :type tags_intersect: list of `str`, optional
         :param token: the first paginate token to be used, defaults to None
-        :type token: str, optional
+        :type token: `str`, optional
         :param maximum: the maximum number of pages to retrieve, defaults to 10
-        :type maximum: Union[int, None], optional
+        :type maximum: `int`, optional
         :return: A paginate object
-        :rtype: :class:`paginate.PaginateResponse`
+        :rtype: :class:`~qarnot.paginate.PaginateResponse`
         """
 
-        filter = create_task_filter(tags=tags, tags_intersect=tags_intersect)
-        url = get_url('paginate tasks summaries') if summary and filter is None else get_url('paginate tasks')
-        result = self._page_call(url, self._paginate_request(filter, token, maximum))
-        data = [Task.from_json(self, task, summary) for task in result["data"]]
-        return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
+        filters = create_task_filter(tags=tags, tags_intersect=tags_intersect)
+        url = get_url('paginate tasks summaries') if summary and filters is None else get_url('paginate tasks')
+        result = self._page_call(url, self._paginate_request(filters, token, maximum))
+        data = [Task.from_json(self, task, summary) for task in result.get("data")]
+        return PaginateResponse(token=result.get("token", token), next_token=result.get("nextToken"), is_truncated=result.get("isTruncated"), page_data=data)
 
     def jobs_page(self, token=None, maximum=None, tags=None, tags_intersect=None):
         """Return a paginate job object.
 
         :param tags_intersect: use a tag exclusive filter, defaults to None
-        :type tags_intersect: List, optional
+        :type tags_intersect: list of `str`
         :param token: the first paginate token to be used, defaults to None
-        :type token: str, optional
+        :type token: `str`, optional
         :param maximum: the maximum number of pages to retrieve, defaults to 10
-        :type maximum: Union[int, None], optional
+        :type maximum: `int`, optional
         :return: A paginate object
-        :rtype: :class:`paginate.PaginateResponse`
+        :rtype: :class:`~qarnot.paginate.PaginateResponse`
         """
 
-        filter = create_job_filter(tags=tags, tags_intersect=tags_intersect)
-        result = self._page_call(get_url('paginate jobs'), self._paginate_request(filter, token, maximum))
-        data = [Job.from_json(self, job) for job in result["data"]]
-        return PaginateResponse(token=result.get("token", token), next_token=result["nextToken"], is_truncated=result["isTruncated"], page_data=data)
+        filters = create_job_filter(tags=tags, tags_intersect=tags_intersect)
+        result = self._page_call(get_url('paginate jobs'), self._paginate_request(filters, token, maximum))
+        data = [Job.from_json(self, job) for job in result.get("data")]
+        return PaginateResponse(token=result.get("token", token), next_token=result.get("nextToken"), is_truncated=result.get("isTruncated"), page_data=data)
 
     def hardware_constraints_page(self, limit=50, offset=0):
         """Return a list of hardware constraints limited with offset.
@@ -720,61 +659,78 @@ class Connection(object):
         :param offset: the number of constraints ignored in the response, defaults to 0
         :type token: `int`, optional
         :return: An offset object
-        :rtype: `qarnot.paginate.OffsetResponse`
+        :rtype: :class:`~qarnot.paginate.OffsetResponse`
         """
 
         result = self._offset_call(get_url('hardware constraints'), self._offset_request(limit, offset))
-        data = [HardwareConstraint.from_json(hw_constraint) for hw_constraint in result["data"]]
-        return OffsetResponse(total=result["total"], limit=result["limit"], offset=result["offset"], page_data=data)
+        data = [HardwareConstraint.from_json(hw_constraint) for hw_constraint in result.get("data")]
+        return OffsetResponse(total=result.get("total"), limit=result.get("limit"), offset=result.get("offset"), page_data=data)
+
+    def search_cpu_model_constraints(self, cpu_model):
+        """Return a list of CPU model hardware constraints matching the search term.
+
+        These constraints are ordered by relevancy.
+
+        :param str cpu_model: search term to match available cpu constraints.
+        :return: A list of CPU model hardware constraints ordered by relevancy.
+        :rtype: list(:class:`~qarnot.hardware_constraint.CpuModelHardware`)
+        """
+
+        response = self._get(get_url('cpu model constraints search'), params={'cpuModel': cpu_model})
+        raise_on_error(response)
+        return [
+            HardwareConstraint.from_json(hw_constraint)
+            for hw_constraint in response.json()
+        ]
 
     def retrieve_pool(self, uuid):
-        """Retrieve a :class:`qarnot.pool.Pool` from its uuid
+        """Retrieve a :class:`~qarnot.pool.Pool` from its uuid
 
         :param str uuid: Desired pool uuid
         :rtype: :class:`~qarnot.pool.Pool`
         :returns: Existing pool defined by the given uuid
-        :raises qarnot.exceptions.MissingPoolException: pool does not exist
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.MissingPoolException: pool does not exist
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
 
         response = self._get(get_url('pool update', uuid=uuid))
         if response.status_code == 404:
-            raise MissingPoolException(response.json()['message'])
+            raise MissingPoolException(get_error_message_from_http_response(response))
         raise_on_error(response)
         return Pool.from_json(self, response.json())
 
     def retrieve_task(self, uuid):
-        """Retrieve a :class:`qarnot.task.Task` from its uuid
+        """Retrieve a :class:`~qarnot.task.Task` from its uuid
 
         :param str uuid: Desired task uuid
         :rtype: :class:`~qarnot.task.Task`
         :returns: Existing task defined by the given uuid
-        :raises qarnot.exceptions.MissingTaskException: task does not exist
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.MissingTaskException: task does not exist
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
 
         response = self._get(get_url('task update', uuid=uuid))
         if response.status_code == 404:
-            raise MissingTaskException(response.json()['message'])
+            raise MissingTaskException(get_error_message_from_http_response(response))
         raise_on_error(response)
         return Task.from_json(self, response.json())
 
     def retrieve_job(self, uuid):
-        """Retrieve a :class:`qarnot.job.Job` from its uuid
+        """Retrieve a :class:`~qarnot.job.Job` from its uuid
 
         :param str uuid: Desired job uuid
         :rtype: :class:`~qarnot.job.Job`
         :returns: Existing job defined by the given uuid
-        :raises qarnot.exceptions.MissingJobException: job does not exist
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.MissingJobException: job does not exist
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
 
         response = self._get(get_url('job update', uuid=uuid))
         if response.status_code == 404:
-            raise MissingJobException(response.json()['message'])
+            raise MissingJobException(get_error_message_from_http_response(response))
         raise_on_error(response)
         return Job.from_json(self, response.json())
 
@@ -784,6 +740,8 @@ class Connection(object):
         :param str uuid: the bucket uuid (name)
         :rtype: :class:`~qarnot.bucket.Bucket`
         :returns: Existing or newly created bucket defined by the given name
+
+        :raises ~qarnot.exceptions.BucketStorageUnavailableException: the bucket storage engine is not available
         """
         if self._s3client is None:
             raise BucketStorageUnavailableException()
@@ -796,6 +754,8 @@ class Connection(object):
         :param str uuid: Desired bucket uuid (name)
         :rtype: :class:`~qarnot.bucket.Bucket`
         :returns: Existing bucket defined by the given uuid (name)
+
+        :raises ~qarnot.exceptions.BucketStorageUnavailableException: the bucket storage engine is not available
         :raises: botocore.exceptions.ClientError: Bucket does not exist, or invalid credentials
         """
         if self._s3client is None:
@@ -844,7 +804,9 @@ class Connection(object):
         """Create a new :class:`~qarnot.task.Task`.
 
         :param str name: given name of the task
-        :param profile_or_pool: which profile to use with this task, or which Pool to run task, or which job to attach it to
+        :param profile_or_pool: which profile to use with this task, or which Pool to run task, or which job to attach it to.
+
+            .. warning:: The :class:`~qarnot.pool.Pool` or :class:`~qarnot.job.Job` need to be already submitted to the api with :meth:`.Pool.submit` or :meth:`.Job.submit` in order to be correctly linked to the task.
         :type profile_or_pool: str or :class:`~qarnot.pool.Pool` or None
         :param instancecount_or_range: number of instances, or ranges on which to run task. Defaults to 1.
         :type instancecount_or_range: int or str
@@ -862,7 +824,7 @@ class Connection(object):
         """Submit a list of :class:`~qarnot.task.Task`.
 
         :param List of :class:`~qarnot.task.Task`.
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
 
         .. note:: Will ensure all added files are on the resource bucket
            regardless of their uploading mode.
@@ -877,6 +839,7 @@ class Connection(object):
 
         if responses.status_code == 503:
             raise QarnotGenericException("Service Unavailable")
+        raise_on_error(responses)
 
         bulk_responses = [BulkTaskResponse(x) for x in responses.json()]
 
@@ -894,48 +857,60 @@ class Connection(object):
     def profiles_names(self):
         """Get list of profiles names available on the cluster.
 
-        :rtype: list of :class:`str`
+        :rtype: list of `str`
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
         url = get_url('profiles')
         response = self._get(url)
         raise_on_error(response)
         return response.json()
 
+    def profile_details(self, profile_name):
+        """Get a profile available on the cluster.
+
+        :rtype: :class:`Profile`
+
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        """
+        url = get_url('profile details', profile=profile_name)
+        response = self._get(url)
+        if response.status_code == 404:
+            return None
+        raise_on_error(response)
+        return Profile(response.json())
+
     def profiles(self):
         """Get list of profiles available on the cluster.
 
         :rtype: list of :class:`Profile`
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
-        profiles_list = []
-        for p in self.profiles_names():
-            url = get_url('profile details', profile=p)
-            response2 = self._get(url)
-            if response2.status_code == 404:
-                continue
-            raise_on_error(response2)
-            profiles_list.append(Profile(response2.json()))
-        return profiles_list
+        if _HAS_CONCURRENT:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                return list(filter(lambda x: x is not None, executor.map(self.profile_details, self.profiles_names())))
+        else:
+            return list(filter(lambda x: x is not None, [self.profile_details(p) for p in self.profiles_names()]))
 
     def retrieve_profile(self, name):
         """Get details of a profile from its name.
 
         :rtype: :class:`Profile`
 
-        :raises qarnot.exceptions.UnauthorizedException: invalid credentials
-        :raises qarnot.exceptions.QarnotGenericException: API general error, see message for details
+        :raises ~qarnot.exceptions.UnauthorizedException: invalid credentials
+        :raises ~qarnot.exceptions.MissingProfileException: profile not found
+        :raises ~qarnot.exceptions.QarnotGenericException: API general error, see message for details
         """
 
         url = get_url('profile details', profile=name)
         response = self._get(url)
-        raise_on_error(response)
         if response.status_code == 404:
-            raise QarnotGenericException(response.json()['message'])
+            raise MissingProfileException(get_error_message_from_http_response(response))
+        raise_on_error(response)
         return Profile(response.json())
 
     def create_bucket(self, name):
@@ -944,7 +919,7 @@ class Connection(object):
 
         :param str name: bucket name
 
-        :rtype: :class:`qarnot.bucket.Bucket`
+        :rtype: :class:`~qarnot.bucket.Bucket`
         :returns: The created or existing :class:`~qarnot.bucket.Bucket`.
 
         """
@@ -955,7 +930,9 @@ class Connection(object):
 
         :param name: given name of the job
         :type name: :class:`str`
-        :param pool: which Pool to submit the job in,
+        :param pool: which Pool to submit the job in.
+
+            .. warning:: The :class:`~qarnot.pool.Pool` needs to be already submitted to the api with :meth:`.Pool.submit` in order to be correctly linked to the job.
         :type pool: :class:`~qarnot.pool.Pool` or None
         :param shortname: userfriendly job name
         :type shortname: :class:`str`
@@ -979,7 +956,7 @@ class UserInfo(object):
         """:type: :class:`str`
 
         User email address."""
-        self.max_bucket = info['maxBucket']
+        self.max_bucket = info.get('maxBucket')
         """:type: :class:`int`
 
         Maximum number of buckets allowed (resource and result buckets)."""
@@ -987,69 +964,105 @@ class UserInfo(object):
         """:type: :class:`int`
 
         Number of buckets owned by the user."""
-        self.quota_bytes_bucket = info['quotaBytesBucket']
+        self.quota_bytes_bucket = info.get('quotaBytesBucket')
         """:type: :class:`int`
 
         Total storage space allowed for the user's buckets (in Bytes)."""
-        self.used_quota_bytes_bucket = info['usedQuotaBytesBucket']
+        self.used_quota_bytes_bucket = info.get('usedQuotaBytesBucket')
         """:type: :class:`int`
 
         Total storage space used by the user's buckets (in Bytes)."""
-        self.task_count = info['taskCount']
+        self.task_count = info.get('taskCount')
         """:type: :class:`int`
 
         Total number of tasks belonging to the user."""
-        self.max_task = info['maxTask']
+        self.max_task = info.get('maxTask')
         """:type: :class:`int`
 
         Maximum number of tasks the user is allowed to create."""
-        self.running_task_count = info['runningTaskCount']
+        self.running_task_count = info.get('runningTaskCount')
         """:type: :class:`int`
 
         Number of tasks currently in 'Submitted' state."""
-        self.max_running_task = info['maxRunningTask']
+        self.max_running_task = info.get('maxRunningTask')
         """:type: :class:`int`
 
         Maximum number of running tasks."""
-        self.max_instances = info['maxInstances']
+        self.max_instances = info.get('maxInstances')
         """:type: :class:`int`
 
         Maximum number of instances."""
-        self.max_pool = info['maxPool']
+        self.max_cores = info.get('maxFlexCores')
+        """:type: :class:`int`
+
+        Maximum number of cores."""
+        self.max_pool = info.get('maxPool')
         """:type: :class:`int`
 
         Maximum number of pool the user is allowed to create."""
-        self.pool_count = info['poolCount']
+        self.pool_count = info.get('poolCount')
         """:type: :class:`int`
 
         Total number of pools belonging to the user."""
-        self.max_running_pool = info['maxRunningPool']
+        self.max_running_pool = info.get('maxRunningPool')
         """:type: :class:`int`
 
         Maximum number of running pools the user is allowed to create."""
-        self.running_pool_count = info['runningPoolCount']
+        self.running_pool_count = info.get('runningPoolCount')
         """:type: :class:`int`
 
         Number of pools currently submitted or running."""
-        self.running_instance_count = info['runningInstanceCount']
+        self.running_instance_count = info.get('runningInstanceCount', -1)
         """:type: :class:`int`
 
         Number of Instances currently submitted or running."""
-        self.running_core_count = info['runningCoreCount']
+        self.running_core_count = info.get('runningCoreCount', -1)
         """:type: :class:`int`
 
         Number of cores currently submitted or running."""
+        self.computing_quotas = ComputingQuotas.from_json(info.get('computingQuotas')) or ComputingQuotas.from_json_legacy(info)
+        """:type: :class:`~qarnot.computing_quotas.ComputingQuotas`
+
+        Computing quotas information of the user and his organization."""
+        self.max_flex_instances = self.computing_quotas.user.flex.max_instances if self.computing_quotas is not None else info.get('maxFlexInstances')
+        """:type: :class:`int`
+
+        .. deprecated:: v2.18.0
+           Use `self.computing_quotas` instead.
+
+        Maximum number of instances simultaneously used with Flex scheduling plan."""
+        self.max_flex_cores = self.computing_quotas.user.flex.max_cores if self.computing_quotas is not None else info.get('maxFlexCores')
+        """:type: :class:`int`
+
+        .. deprecated:: v2.18.0
+           Use `self.computing_quotas` instead.
+
+        Maximum number of cores simultaneously used with Flex scheduling plan."""
+        self.max_on_demand_instances = self.computing_quotas.user.on_demand.max_instances if self.computing_quotas is not None else info.get('maxOnDemandInstances')
+        """:type: :class:`int`
+
+        .. deprecated:: v2.18.0
+           Use `self.computing_quotas` instead.
+
+        Maximum number of instances simultaneously used with OnDemand scheduling plan."""
+        self.max_on_demand_cores = self.computing_quotas.user.on_demand.max_cores if self.computing_quotas is not None else info.get('maxOnDemandCores')
+        """:type: :class:`int`
+
+        .. deprecated:: v2.18.0
+           Use `self.computing_quotas` instead.
+
+        Maximum number of cores simultaneously used with OnDemand scheduling plan."""
 
 
 class Profile(object):
     """Information about a profile."""
     def __init__(self, info):
-        self.name = info['name']
+        self.name = info.get('name', '')
         """:type: :class:`str`
 
         Name of the profile."""
-        self.constants = tuple((cst['name'], cst['value'])
-                               for cst in info['constants'])
+        self.constants = tuple((cst.get('name'), cst.get('value'))
+                               for cst in info.get('constants', []))
         """:type: List of (:class:`str`, :class:`str`)
 
         List of couples (name, value) representing constants for this profile

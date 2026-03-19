@@ -8,7 +8,7 @@ from qarnot import paginate
 import pytest
 import requests
 import simplejson
-from unittest.mock import Mock
+from mock import Mock
 from .mock_connection import MockConnection, PostRequest
 from requests.models import Response
 

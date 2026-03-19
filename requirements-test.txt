@@ -1,6 +1,6 @@
-pytest
+pytest==4.6.11
 pytest-runner
 simplejson
-pylint
-flake8
-mock
+pytest-cov==2.12.1
+pytest-picked
+moto==1.3.16
